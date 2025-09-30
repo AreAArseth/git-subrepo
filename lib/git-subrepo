@@ -77,6 +77,9 @@ file=       Specify a commit message file
 r,remote=   Specify the upstream remote to push/pull/fetch
 s,squash    Squash commits on push
 u,update    Add the --branch and/or --remote overrides to .gitrepo
+l,log       Show commit summaries for pending pull/push
+log-limit=  Limit the number of commits shown with --log (default 5)
+diff        Show diffstat for pending pull/push
 
 q,quiet     Show minimal output
 v,verbose   Show verbose output
@@ -104,6 +107,13 @@ main() {
   local quiet_wanted=false      # Output should be quiet
   local verbose_wanted=false    # Output should be verbose
   local debug_wanted=false      # Show debug messages
+
+  local status_log_wanted=false # Show commit logs in status output
+  local status_log_limit=5      # Number of commits to show in --log output
+  local status_log_cli=false    # Track explicit --log/--log-limit usage
+  local status_log_limit_set=false # Track explicit --log-limit usage
+  local status_diff_wanted=false # Show diffstat summaries
+  local status_diff_cli=false   # Track explicit --diff usage
 
   local subdir=                 # Subdirectory of the subrepo being used
   local subref=                 # Valid git ref format of subdir
@@ -348,6 +358,51 @@ status-refs() {
   if [[ $output ]]; then
     printf "  Refs:\n%s" "$output"
   fi
+}
+
+status-format-commit-count() {
+  local count=$1
+  if (( count <= 0 )); then
+    printf 'up to date'
+  else
+    local label=commit
+    (( count == 1 )) || label+=s
+    printf '%d %s' "$count" "$label"
+  fi
+}
+
+status-print-log-lines() {
+  local title=$1
+  local limit=$2
+  shift 2
+  local commits=("$@")
+  (( limit > 0 )) || return
+  (( ${#commits[@]} )) || return
+
+  echo "    $title:"
+  local shown=0
+  local commit
+  for commit in "${commits[@]}"; do
+    (( shown >= limit )) && break
+    git log -1 --oneline "$commit" | sed 's/^/      /'
+    : $((shown++))
+  done
+  local remaining=$(( ${#commits[@]} - shown ))
+  if (( remaining > 0 )); then
+    local label=commit
+    (( remaining == 1 )) || label+=s
+    printf '      ...and %d more %s\n' "$remaining" "$label"
+  fi
+}
+
+status-print-diffstat() {
+  local title=$1
+  shift
+  local diff_output
+  diff_output=$(git diff --stat "$@" 2> /dev/null) || return
+  [[ $diff_output ]] || return
+  echo "    $title diff:"
+  sed 's/^/      /' <<<"$diff_output"
 }
 
 # `git subrepo clean <subdir>` command
@@ -1002,8 +1057,13 @@ subrepo:status() {
     [[ $upstream_head_commit ]] &&
       echo "  Upstream Ref:    $upstream_head_commit"
     echo "  Tracking Branch: $subrepo_branch"
-    [[ -z $subrepo_commit ]] ||
-      echo "  Pulled Commit:   $(git rev-parse --short "$subrepo_commit")"
+    if [[ -n $subrepo_commit ]]; then
+      if git:rev-exists "$subrepo_commit"; then
+        echo "  Pulled Commit:   $(git rev-parse --short "$subrepo_commit")"
+      else
+        echo "  Pulled Commit:   ${subrepo_commit:0:7}?"
+      fi
+    fi
     if [[ $subrepo_parent ]]; then
       echo "  Pull Parent:     $(git rev-parse --short "$subrepo_parent")"
     # TODO Remove this eventually:
@@ -1020,6 +1080,89 @@ subrepo:status() {
     ) || true
     if [[ $_worktree  ]]; then
       echo "  Worktree: $_worktree"
+    fi
+
+    if $verbose_wanted && ! $status_log_cli; then
+      status_log_wanted=true
+    fi
+
+    local pull_commits=()
+    local pull_count=0
+    local pull_data_available=false
+    if [[ $subrepo_commit && $upstream_head_commit ]]; then
+      if git:rev-exists "$subrepo_commit" && git:rev-exists "$upstream_head_commit"; then
+        pull_data_available=true
+        if [[ $subrepo_commit != "$upstream_head_commit" ]]; then
+          mapfile -t pull_commits < <(git rev-list "$subrepo_commit..$upstream_head_commit")
+          pull_count=${#pull_commits[@]}
+        fi
+      fi
+    fi
+
+    if $pull_data_available; then
+      printf '  Pull:           %s\n' "$(status-format-commit-count "$pull_count")"
+      if (( pull_count > 0 )); then
+        if $status_log_wanted; then
+          status-print-log-lines "Remote commits" "$status_log_limit" "${pull_commits[@]}"
+        fi
+        if $status_diff_wanted; then
+          if git:rev-exists "$subrepo_commit" && git:rev-exists "$upstream_head_commit"; then
+            status-print-diffstat "Remote" "$subrepo_commit" "$upstream_head_commit"
+          fi
+        fi
+      fi
+    else
+      echo "  Pull:           no remote data"
+    fi
+
+    local push_commits=()
+    local push_count=0
+    local push_data_available=false
+    local subdir_tree=
+    if [[ $subrepo_parent ]]; then
+      if git:rev-exists "$subrepo_parent"; then
+        push_data_available=true
+        local raw_commits=()
+        mapfile -t raw_commits < <(git rev-list "$subrepo_parent..HEAD" -- "$subdir")
+        local sync_commit=
+        sync_commit=$(git log -1 --format=%H "$subrepo_parent..HEAD" -- "$gitrepo") || true
+        local commit
+        for commit in "${raw_commits[@]}"; do
+          if [[ $sync_commit && $commit == "$sync_commit" ]]; then
+            continue
+          fi
+          push_commits+=("$commit")
+        done
+        push_count=${#push_commits[@]}
+
+        if [[ $subrepo_commit ]]; then
+          if git cat-file -e HEAD:"$subdir" 2> /dev/null; then
+            subdir_tree=$(git rev-parse HEAD:"$subdir")
+            if git:rev-exists "$subrepo_commit"; then
+              if git diff --quiet "$subrepo_commit" "$subdir_tree" 2> /dev/null; then
+                push_commits=()
+                push_count=0
+              fi
+            fi
+          fi
+        fi
+      fi
+    fi
+
+    if $push_data_available; then
+      printf '  Push:           %s\n' "$(status-format-commit-count "$push_count")"
+      if (( push_count > 0 )); then
+        if $status_log_wanted; then
+          status-print-log-lines "Local commits" "$status_log_limit" "${push_commits[@]}"
+        fi
+        if $status_diff_wanted && [[ $subrepo_commit && $subdir_tree ]]; then
+          if git:rev-exists "$subrepo_commit"; then
+            status-print-diffstat "Local" "$subrepo_commit" "$subdir_tree"
+          fi
+        fi
+      fi
+    else
+      echo "  Push:           no local history"
     fi
 
     if "$verbose_wanted"; then
@@ -1116,6 +1259,21 @@ get-command-options() {
       -s) squash_wanted=true ;;
       -u) update_wanted=true
           commit_msg_args+=("--update") ;;
+      -l|--log)
+          status_log_wanted=true
+          status_log_cli=true ;;
+      --log-limit)
+          status_log_wanted=true
+          status_log_cli=true
+          status_log_limit_set=true
+          status_log_limit=$1
+          if [[ ! $status_log_limit =~ ^[0-9]+$ || $status_log_limit -le 0 ]]; then
+            error "--log-limit requires a positive integer"
+          fi
+          shift ;;
+      --diff)
+          status_diff_wanted=true
+          status_diff_cli=true ;;
       -q) quiet_wanted=true ;;
       -v) verbose_wanted=true ;;
       -d) debug_wanted=true ;;
@@ -1159,6 +1317,16 @@ get-command-options() {
     fi
   done
 
+  if $status_log_cli; then
+    check_option log
+  fi
+  if $status_log_limit_set; then
+    check_option log-limit
+  fi
+  if $status_diff_cli; then
+    check_option diff
+  fi
+
   if [[ $override_branch ]]; then
     check_option branch
   fi
@@ -1186,7 +1354,7 @@ options_fetch='all branch force remote'
 options_init='branch remote method'
 options_pull='all branch edit force message remote update'
 options_push='all branch force message remote squash update'
-options_status='ALL all fetch'
+options_status='ALL all fetch log log-limit diff'
 check_option() {
   local var=options_${command//-/_}
   [[ ${!var} =~ $1 ]] ||

@@ -290,17 +290,21 @@ option to commit anyway.
 The C<commit> command accepts the C<--edit>, C<--fetch>, C<--file>, C<--force>
 and C<--message=> options.
 
-=item C<< git subrepo status [<subdir>|--all|--ALL] [-F] [-q|-v] >>
+=item C<< git subrepo status [<subdir>|--all|--ALL] [-F] [--log|--log-limit=<n>] [--diff] [-q|-v] >>
 
-Get the status of a subrepo. Uses the C<--all> option by default. If the C<--quiet> flag is used, just print the subrepo names, one per line.
+Get the status of a subrepo. Uses the C<--all> option by default. If the
+C<--quiet> flag is used, just print the subrepo names, one per line.
 
-The C<--verbose> option will show all the recent local and upstream commits.
+By default the output shows how many commits are available to pull and push.
+The C<--log> flag (or C<--verbose>) prints the commit subjects for each
+direction. Use C<--log-limit=<n>> to control how many entries are shown (the
+default is 5). The C<--diff> flag appends a short diffstat for each direction.
 
 Use C<--ALL> to show the subrepos of the subrepos (ie the
 "subsubrepos"), if any.
 
-The C<status> command accepts the C<--all>, C<--ALL>, C<--fetch>, C<--quiet>
-and C<--verbose> options.
+The C<status> command accepts the C<--all>, C<--ALL>, C<--fetch>, C<--log>,
+C<--log-limit>, C<--diff>, C<--quiet> and C<--verbose> options.
 
 =item C<< git subrepo clean <subdir>|--all|--ALL [-f] >>
 

@@ -292,19 +292,23 @@ help:push() {
 help:status() {
     cat <<'...'
 
-  Usage: git subrepo status [<subdir>|--all|--ALL] [-F] [-q|-v]
+  Usage: git subrepo status [<subdir>|--all|--ALL] [-F]
+                           [--log|--log-limit=<n>] [--diff] [-q|-v]
 
 
   Get the status of a subrepo. Uses the `--all` option by default. If the
   `--quiet` flag is used, just print the subrepo names, one per line.
 
-  The `--verbose` option will show all the recent local and upstream commits.
+  By default the output shows how many commits are available to pull and push.
+  The `--log` flag (or `--verbose`) prints the commit subjects for each
+  direction. Use `--log-limit=<n>` to control how many entries are shown (the
+  default is 5). The `--diff` flag appends a short diffstat for each direction.
 
   Use `--ALL` to show the subrepos of the subrepos (ie the "subsubrepos"), if
   any.
 
-  The `status` command accepts the `--all`, `--ALL`, `--fetch`, `--quiet` and
-  `--verbose` options.
+  The `status` command accepts the `--all`, `--ALL`, `--fetch`, `--log`,
+  `--log-limit`, `--diff`, `--quiet` and `--verbose` options.
 ...
 }
 
