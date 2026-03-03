@@ -734,6 +734,9 @@ subrepo:retarget() {
   FAIL=false OUT=true RUN git rev-parse -q --verify MERGE_HEAD
   if OK; then
     say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $subdir"
+    if $update_wanted && [[ $override_branch || $override_remote ]]; then
+      say "git-subrepo: '$subdir/.gitrepo' was updated. Commit it in $start_pwd before rerunning retarget."
+    fi
     CODE=1
     OK=false
     return
@@ -754,6 +757,9 @@ subrepo:retarget() {
       say
       say "  ${output//$'\n'/$'\n'  }"
       say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $subdir"
+      if $update_wanted && [[ $override_branch || $override_remote ]]; then
+        say "git-subrepo: '$subdir/.gitrepo' was updated. Commit it in $start_pwd before rerunning retarget."
+      fi
       CODE=1
       OK=false
       return
@@ -766,6 +772,9 @@ subrepo:retarget() {
       say
       say "  ${output//$'\n'/$'\n'  }"
       say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $subdir"
+      if $update_wanted && [[ $override_branch || $override_remote ]]; then
+        say "git-subrepo: '$subdir/.gitrepo' was updated. Commit it in $start_pwd before rerunning retarget."
+      fi
       CODE=1
       OK=false
       return
@@ -2124,7 +2133,19 @@ This is the common conflict resolution workflow:
   7. git subrepo push $subdir $branch_name
 ...
   else
-    if [[ $commit_msg_file ]]; then
+    if [[ $command == retarget ]]; then
+      if $update_wanted && [[ $override_branch || $override_remote ]]; then
+    cat <<...
+  7. git add $subdir/.gitrepo
+  8. git commit -m "Retarget $subdir to $subrepo_remote ($subrepo_branch)"
+  9. git subrepo retarget $subdir
+...
+      else
+    cat <<...
+  7. git subrepo retarget $subdir
+...
+      fi
+    elif [[ $commit_msg_file ]]; then
     cat <<...
   7. git subrepo commit --file=$commit_msg_file $subdir
 ...
