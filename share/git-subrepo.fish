@@ -21,6 +21,9 @@ complete -c git-subrepo -l file -d 'Specify a commit message file' -r
 complete -c git-subrepo -l remote -s r -d 'Specify the upstream remote to push/pull/fetch' -r
 complete -c git-subrepo -l squash -s s -d 'Squash commits on push'
 complete -c git-subrepo -l update -s u -d 'Add the --branch and/or --remote overrides to .gitrepo'
+complete -c git-subrepo -l log -s l -d 'Show commit summaries for pending pull/push'
+complete -c git-subrepo -l log-limit -d 'Limit the number of commits shown with --log (default 5)' -r
+complete -c git-subrepo -l diff -d 'Show diffstat for pending pull/push'
 complete -c git-subrepo -l quiet -s q -d 'Show minimal output'
 complete -c git-subrepo -l verbose -s v -d 'Show verbose output'
 complete -c git-subrepo -l debug -s d -d 'Show the actual commands used'

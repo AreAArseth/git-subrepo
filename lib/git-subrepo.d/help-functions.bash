@@ -256,32 +256,6 @@ help:pull() {
 ...
 }
 
-help:retarget() {
-    cat <<'...'
-
-  Usage: git subrepo retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f]
-
-
-  Retarget a subrepo to a different upstream branch or remote.
-
-  This is used when the subrepo's upstream branch (or remote) has changed and
-  the local subrepo history is not contained in the new upstream. Retarget
-  creates or reuses the local `subrepo/<subdir>` branch, merges in the new
-  upstream content, and pushes the merged history to the upstream branch.
-
-  If merge conflicts occur, resolve them in the worktree and commit the merge.
-  Then rerun `git subrepo retarget <subdir>` to finish.
-
-  Use `--branch` and/or `--remote` to override the upstream. For `retarget`,
-  those overrides are persisted into `.gitrepo` by default (guided replacement
-  for manual edits). You may still pass `--update` explicitly.
-  Commit the `.gitrepo` change before running `pull`.
-
-  The `retarget` command accepts the `--all`, `--branch=`, `--remote=`,
-  `--update`, and `--force` options.
-...
-}
-
 help:push() {
     cat <<'...'
 
@@ -316,26 +290,48 @@ help:push() {
 ...
 }
 
+help:retarget() {
+    cat <<'...'
+
+  Usage: git subrepo retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f]
+
+
+  Retarget a subrepo to a different upstream branch or remote.
+
+  Use this when the upstream branch (or remote) has been changed and the local
+  subrepo history is not contained in the new upstream. The `retarget` command
+  creates or reuses the `subrepo/<subdir>` branch, merges in the new upstream,
+  and pushes the merged history to the upstream branch.
+
+  If merge conflicts occur, resolve them in the worktree and commit the merge,
+  then rerun `git subrepo retarget <subdir>`.
+
+  Use `--branch` and/or `--remote` to override the upstream. For `retarget`,
+  those overrides are persisted into `<subdir>/.gitrepo` by default.
+  You may still pass `--update` explicitly.
+  Commit the `<subdir>/.gitrepo` change before pulling.
+
+  The `retarget` command accepts the `--all`, `--branch=`, `--remote=`,
+  `--update` and `--force` options.
+...
+}
+
 help:status() {
     cat <<'...'
 
-  Usage: git subrepo status [<subdir>|--all|--ALL] [-F]
-                           [--log|--log-limit=<n>] [--diff] [-q|-v]
+  Usage: git subrepo status [<subdir>|--all|--ALL] [-F] [-q|-v]
 
 
   Get the status of a subrepo. Uses the `--all` option by default. If the
   `--quiet` flag is used, just print the subrepo names, one per line.
 
-  By default the output shows how many commits are available to pull and push.
-  The `--log` flag (or `--verbose`) prints the commit subjects for each
-  direction. Use `--log-limit=<n>` to control how many entries are shown (the
-  default is 5). The `--diff` flag appends a short diffstat for each direction.
+  The `--verbose` option will show all the recent local and upstream commits.
 
   Use `--ALL` to show the subrepos of the subrepos (ie the "subsubrepos"), if
   any.
 
-  The `status` command accepts the `--all`, `--ALL`, `--fetch`, `--log`,
-  `--log-limit`, `--diff`, `--quiet` and `--verbose` options.
+  The `status` command accepts the `--all`, `--ALL`, `--fetch`, `--quiet` and
+  `--verbose` options.
 ...
 }
 
