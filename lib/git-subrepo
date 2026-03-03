@@ -278,7 +278,7 @@ command:retarget() {
   subrepo:retarget
   if OK; then
     say "Subrepo '$subdir' retargeted to '$subrepo_remote' ($subrepo_branch)."
-    if $update_wanted; then
+    if $update_wanted && [[ $override_branch || $override_remote ]]; then
       say "Updated '$subdir/.gitrepo'. Commit it before running: git subrepo pull $subdir"
     else
       say "Now run: git subrepo pull $subdir"
@@ -1451,6 +1451,11 @@ get-command-options() {
     command_arguments[0]=$first
   fi
   commit_msg_args+=("${command_arguments[@]}")
+
+  # For retarget, branch/remote overrides should persist by default.
+  if [[ $command == retarget && ( $override_branch || $override_remote ) ]]; then
+    update_wanted=true
+  fi
 
   for option in all ALL edit fetch force squash; do
     var=${option}_wanted

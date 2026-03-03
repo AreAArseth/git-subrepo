@@ -284,9 +284,10 @@ and pushes the merged history to the upstream branch.
 If merge conflicts occur, resolve them in the worktree and commit the merge,
 then rerun \f(CW\*(C`git subrepo retarget <subdir>\*(C'\fR.
 .Sp
-Use \f(CW\*(C`\-\-branch\*(C'\fR and/or \f(CW\*(C`\-\-remote\*(C'\fR to override the upstream. Use
-\f(CW\*(C`\-\-update\*(C'\fR to write those overrides into the \f(CW\*(C`<subdir>/.gitrepo\*(C'\fR file.
-If you use \f(CW\*(C`\-\-update\*(C'\fR, commit the \f(CW\*(C`<subdir>/.gitrepo\*(C'\fR change before pulling.
+Use \f(CW\*(C`\-\-branch\*(C'\fR and/or \f(CW\*(C`\-\-remote\*(C'\fR to override the upstream. For
+\f(CW\*(C`retarget\*(C'\fR, those overrides are persisted into \f(CW\*(C`<subdir>/.gitrepo\*(C'\fR by
+default. You may still pass \f(CW\*(C`\-\-update\*(C'\fR explicitly.
+Commit the \f(CW\*(C`<subdir>/.gitrepo\*(C'\fR change before pulling.
 .Sp
 The \f(CW\*(C`retarget\*(C'\fR command accepts the \f(CW\*(C`\-\-all\*(C'\fR, \f(CW\*(C`\-\-branch=\*(C'\fR, \f(CW\*(C`\-\-remote=\*(C'\fR,
 \f(CW\*(C`\-\-update\*(C'\fR and \f(CW\*(C`\-\-force\*(C'\fR options.

@@ -19,7 +19,7 @@ subrepo-clone-bar-into-foo
 
 (
   cd "$OWNER/foo"
-  git subrepo retarget bar -b branch1 -u
+  git subrepo retarget bar -b branch1
 ) &> /dev/null || die
 
 gitrepo=$OWNER/foo/bar/.gitrepo

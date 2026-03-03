@@ -237,9 +237,10 @@ and pushes the merged history to the upstream branch.
 If merge conflicts occur, resolve them in the worktree and commit the merge,
 then rerun C<git subrepo retarget <subdir>>.
 
-Use C<--branch> and/or C<--remote> to override the upstream. Use C<--update> to
-write those overrides into the C<< <subdir>/.gitrepo >> file.
-If you use C<--update>, commit the C<< <subdir>/.gitrepo >> change before pulling.
+Use C<--branch> and/or C<--remote> to override the upstream. For C<retarget>,
+those overrides are persisted into C<< <subdir>/.gitrepo >> by default.
+You may still pass C<--update> explicitly.
+Commit the C<< <subdir>/.gitrepo >> change before pulling.
 
 The C<retarget> command accepts the C<--all>, C<--branch=>, C<--remote=>,
 C<--update> and C<--force> options.

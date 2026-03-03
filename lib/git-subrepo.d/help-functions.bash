@@ -272,10 +272,10 @@ help:retarget() {
   If merge conflicts occur, resolve them in the worktree and commit the merge.
   Then rerun `git subrepo retarget <subdir>` to finish.
 
-  Use `--branch` and/or `--remote` to override the upstream. Use `--update` to
-  write those overrides into the `.gitrepo` file (guided replacement for
-  manual edits).
-  If you use `--update`, commit the `.gitrepo` change before running `pull`.
+  Use `--branch` and/or `--remote` to override the upstream. For `retarget`,
+  those overrides are persisted into `.gitrepo` by default (guided replacement
+  for manual edits). You may still pass `--update` explicitly.
+  Commit the `.gitrepo` change before running `pull`.
 
   The `retarget` command accepts the `--all`, `--branch=`, `--remote=`,
   `--update`, and `--force` options.
