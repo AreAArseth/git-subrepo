@@ -14,6 +14,7 @@ help                 help [<command>|--all]
 init                 init <subdir> [-r <remote>] [-b <branch>] [--method <merge|rebase>]
 pull                 pull <subdir>|--all [-M|-R|-f] [-m <msg>] [--file=<msg file>] [-e] [-b <branch>] [-r <remote>] [-u]
 push                 push <subdir>|--all [<branch>] [-m msg] [--file=<msg file>] [-r <remote>] [-b <branch>] [-M|-R] [-u] [-f] [-s] [-N]
+retarget             retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f]
 status               status [<subdir>|--all|--ALL] [-F] [-q|-v]
 upgrade              upgrade
 version              version [-q|-v]
@@ -252,6 +253,32 @@ help:pull() {
 
   The `pull` command accepts the `--all`, `--branch=`, `--edit`, `--file`,
   `--force`, `--message=`, `--remote=` and `--update` options.
+...
+}
+
+help:retarget() {
+    cat <<'...'
+
+  Usage: git subrepo retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f]
+
+
+  Retarget a subrepo to a different upstream branch or remote.
+
+  This is used when the subrepo's upstream branch (or remote) has changed and
+  the local subrepo history is not contained in the new upstream. Retarget
+  creates or reuses the local `subrepo/<subdir>` branch, merges in the new
+  upstream content, and pushes the merged history to the upstream branch.
+
+  If merge conflicts occur, resolve them in the worktree and commit the merge.
+  Then rerun `git subrepo retarget <subdir>` to finish.
+
+  Use `--branch` and/or `--remote` to override the upstream. Use `--update` to
+  write those overrides into the `.gitrepo` file (guided replacement for
+  manual edits).
+  If you use `--update`, commit the `.gitrepo` change before running `pull`.
+
+  The `retarget` command accepts the `--all`, `--branch=`, `--remote=`,
+  `--update`, and `--force` options.
 ...
 }
 

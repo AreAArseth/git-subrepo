@@ -71,6 +71,7 @@ git-subrepo \- Git Submodule Alternative
 \&    git subrepo clone <remote\-url> [<subdir>]
 \&    git subrepo init <subdir>
 \&    git subrepo pull <subdir>
+\&    git subrepo retarget <subdir>
 \&    git subrepo push <subdir>
 \&
 \&    git subrepo fetch <subdir>
@@ -270,6 +271,25 @@ The set of commands used above are described in detail below.
 .Sp
 The \f(CW\*(C`pull\*(C'\fR command accepts the \f(CW\*(C`\-\-all\*(C'\fR, \f(CW\*(C`\-\-branch=\*(C'\fR, \f(CW\*(C`\-\-edit\*(C'\fR, \f(CW\*(C`\-\-file\*(C'\fR,
 \&\f(CW\*(C`\-\-force\*(C'\fR, \f(CW\*(C`\-\-message=\*(C'\fR, \f(CW\*(C`\-\-remote=\*(C'\fR and \f(CW\*(C`\-\-update\*(C'\fR options.
+.ie n .IP """git subrepo retarget <subdir>|\-\-all [\-b <branch>] [\-r <remote>] [\-u] [\-f]""" 4
+.el .IP "\f(CWgit subrepo retarget <subdir>|\-\-all [\-b <branch>] [\-r <remote>] [\-u] [\-f]\fR" 4
+.IX Item "git subrepo retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f]"
+Retarget a subrepo to a different upstream branch or remote.
+.Sp
+Use this when the upstream branch (or remote) has been changed and the local
+subrepo history is not contained in the new upstream. The \f(CW\*(C`retarget\*(C'\fR command
+creates or reuses the \f(CW\*(C`subrepo/<subdir>\*(C'\fR branch, merges in the new upstream,
+and pushes the merged history to the upstream branch.
+.Sp
+If merge conflicts occur, resolve them in the worktree and commit the merge,
+then rerun \f(CW\*(C`git subrepo retarget <subdir>\*(C'\fR.
+.Sp
+Use \f(CW\*(C`\-\-branch\*(C'\fR and/or \f(CW\*(C`\-\-remote\*(C'\fR to override the upstream. Use
+\f(CW\*(C`\-\-update\*(C'\fR to write those overrides into the \f(CW\*(C`<subdir>/.gitrepo\*(C'\fR file.
+If you use \f(CW\*(C`\-\-update\*(C'\fR, commit the \f(CW\*(C`<subdir>/.gitrepo\*(C'\fR change before pulling.
+.Sp
+The \f(CW\*(C`retarget\*(C'\fR command accepts the \f(CW\*(C`\-\-all\*(C'\fR, \f(CW\*(C`\-\-branch=\*(C'\fR, \f(CW\*(C`\-\-remote=\*(C'\fR,
+\f(CW\*(C`\-\-update\*(C'\fR and \f(CW\*(C`\-\-force\*(C'\fR options.
 .ie n .IP """git subrepo push <subdir>|\-\-all [<branch>] [\-m msg] [\-\-file=<msg file>] [\-r <remote>] [\-b <branch>] [\-M|\-R] [\-u] [\-f] [\-s] [\-N]""" 4
 .el .IP "\f(CWgit subrepo push <subdir>|\-\-all [<branch>] [\-m msg] [\-\-file=<msg file>] [\-r <remote>] [\-b <branch>] [\-M|\-R] [\-u] [\-f] [\-s] [\-N]\fR" 4
 .IX Item "git subrepo push <subdir>|--all [<branch>] [-m msg] [--file=<msg file>] [-r <remote>] [-b <branch>] [-M|-R] [-u] [-f] [-s] [-N]"

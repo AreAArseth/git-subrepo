@@ -5,7 +5,7 @@ function __fish_git_subrepo_subdirs
 end
 
 complete -c git-subrepo -f
-complete -c git-subrepo -n '__fish_use_subcommand' -a 'branch clean clone commit config fetch help init pull push status upgrade version'
+complete -c git-subrepo -n '__fish_use_subcommand' -a 'branch clean clone commit config fetch help init pull push retarget status upgrade version'
 complete -c git-subrepo -s h -d 'Show the command summary'
 complete -c git-subrepo -l help -d 'Help overview'
 complete -c git-subrepo -l version -d 'Print the git-subrepo version number'
@@ -32,5 +32,6 @@ complete -c git-subrepo -n '__fish_git_using_command config' -a '(__fish_git_sub
 complete -c git-subrepo -n '__fish_git_using_command fetch' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -n '__fish_git_using_command pull' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -n '__fish_git_using_command push' -a '(__fish_git_subrepo_subdirs)'
+complete -c git-subrepo -n '__fish_git_using_command retarget' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -n '__fish_git_using_command status' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -F -n '__fish_git_using_command clone' -a '(__fish_git_remotes)' -d 'Repository to clone from'
