@@ -5,7 +5,7 @@ function __fish_git_subrepo_subdirs
 end
 
 complete -c git-subrepo -f
-complete -c git-subrepo -n '__fish_use_subcommand' -a 'branch clean clone commit config fetch help init pull push status upgrade version'
+complete -c git-subrepo -n '__fish_use_subcommand' -a 'branch clean clone commit config fetch help init pull push retarget status upgrade version'
 complete -c git-subrepo -s h -d 'Show the command summary'
 complete -c git-subrepo -l help -d 'Help overview'
 complete -c git-subrepo -l version -d 'Print the git-subrepo version number'
@@ -21,6 +21,9 @@ complete -c git-subrepo -l file -d 'Specify a commit message file' -r
 complete -c git-subrepo -l remote -s r -d 'Specify the upstream remote to push/pull/fetch' -r
 complete -c git-subrepo -l squash -s s -d 'Squash commits on push'
 complete -c git-subrepo -l update -s u -d 'Add the --branch and/or --remote overrides to .gitrepo'
+complete -c git-subrepo -l log -s l -d 'Show commit summaries for pending pull/push'
+complete -c git-subrepo -l log-limit -d 'Limit the number of commits shown with --log (default 5)' -r
+complete -c git-subrepo -l diff -d 'Show diffstat for pending pull/push'
 complete -c git-subrepo -l quiet -s q -d 'Show minimal output'
 complete -c git-subrepo -l verbose -s v -d 'Show verbose output'
 complete -c git-subrepo -l debug -s d -d 'Show the actual commands used'
@@ -32,5 +35,6 @@ complete -c git-subrepo -n '__fish_git_using_command config' -a '(__fish_git_sub
 complete -c git-subrepo -n '__fish_git_using_command fetch' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -n '__fish_git_using_command pull' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -n '__fish_git_using_command push' -a '(__fish_git_subrepo_subdirs)'
+complete -c git-subrepo -n '__fish_git_using_command retarget' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -n '__fish_git_using_command status' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -F -n '__fish_git_using_command clone' -a '(__fish_git_remotes)' -d 'Repository to clone from'

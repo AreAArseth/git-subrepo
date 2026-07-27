@@ -64,7 +64,7 @@ clone-foo-and-bar
 
 {
   # XXX add 'commit' to cmds here when implemented:
-  for cmd in pull push fetch branch commit clean; do
+  for cmd in pull push fetch branch commit clean retarget; do
     is "$(
         cd "$OWNER/bar"
         catch git subrepo "$cmd"
@@ -164,6 +164,33 @@ clone-foo-and-bar
     )" \
     "git-subrepo: Command failed: 'git ls-remote --symref dummy-repo'." \
     "Error OK: clone non-repo"
+}
+
+{
+  subrepo-clone-bar-into-foo
+  (
+    cd "$OWNER/bar"
+    git checkout --orphan branch1
+    git rm -rf . &> /dev/null || true
+    echo "branch1 change" > branch1.txt
+    git add branch1.txt
+    git commit -m "branch1 change"
+    git push --set-upstream origin branch1
+  ) &> /dev/null || die
+
+  (
+    cd "$OWNER/foo"
+    git config --file=bar/.gitrepo subrepo.branch branch1
+    git add bar/.gitrepo
+    git commit -m "Switch bar subrepo branch"
+  ) &> /dev/null || die
+
+  like "$(
+      cd "$OWNER/foo"
+      catch git subrepo pull bar
+    )" \
+    "git-subrepo: Local history is not contained in upstream" \
+    "Error OK: retarget suggestion for branch swap"
 }
 
 done_testing

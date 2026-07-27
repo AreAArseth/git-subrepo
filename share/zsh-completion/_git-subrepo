@@ -25,6 +25,9 @@ _git-subrepo() {
         '(-r --remote)'{-r,--remote}'[Specify the upstream remote to push/pull/fetch]:r' \
         '(-s --squash)'{-s,--squash}'[Squash commits on push]' \
         '(-u --update)'{-u,--update}'[Add the --branch and/or --remote overrides to .gitrepo]' \
+        '(-l --log)'{-l,--log}'[Show commit summaries for pending pull/push]' \
+        '--log-limit[Limit the number of commits shown with --log (default 5)]:log-limit' \
+        '--diff[Show diffstat for pending pull/push]' \
         '(-q --quiet)'{-q,--quiet}'[Show minimal output]' \
         '(-v --verbose)'{-v,--verbose}'[Show verbose output]' \
         '(-d --debug)'{-d,--debug}'[Show the actual commands used]' \
@@ -33,7 +36,7 @@ _git-subrepo() {
 
     case $state in
     subcmd)
-        compadd branch clean clone commit config fetch help init pull push status upgrade version
+        compadd branch clean clone commit config fetch help init pull push retarget status upgrade version
     ;;
 
     args)
@@ -52,7 +55,7 @@ _git-subrepo() {
                 esac
         ;;
 
-        branch|clean|commit|config|fetch|pull|push|status)
+        branch|clean|commit|config|fetch|pull|push|retarget|status)
             _compadd_subdirs
         ;;
 
@@ -61,7 +64,7 @@ _git-subrepo() {
         ;;
 
         help)
-            compadd branch clean clone commit config fetch help init pull push status upgrade version
+            compadd branch clean clone commit config fetch help init pull push retarget status upgrade version
         ;;
         esac
     ;;

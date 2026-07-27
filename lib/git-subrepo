@@ -44,6 +44,7 @@ Commands:
   init      Turn a current subdirectory into a subrepo
   pull      Pull upstream changes to the subrepo
   push      Push local subrepo changes upstream
+  retarget  Retarget a subrepo to a new upstream
 
   fetch     Fetch a subrepo's remote branch (and create a ref for it)
   branch    Create a branch containing the local subrepo commits
@@ -145,6 +146,7 @@ main() {
   local commit_msg_file=        # Custom commit message using --file
 
   local join_method=            # Current join method (rebase/merge)
+  local allow_divergent_history=false # Allow subrepo history outside upstream
 
   local FAIL=true               # Flag for RUN: fail on error
   local OUT=false               # Flag for RUN: put output in $output
@@ -265,6 +267,27 @@ command:pull() {
     return "$CODE"
   else
     die "Unknown pull error code: '$CODE'"
+  fi
+  return 0
+}
+
+# `git subrepo retarget <subdir>` command:
+command:retarget() {
+  command-setup +subdir
+
+  subrepo:retarget
+  if OK; then
+    say "Subrepo '$subdir' retargeted to '$subrepo_remote' ($subrepo_branch)."
+    if $update_wanted && [[ $override_branch || $override_remote ]]; then
+      say "Updated '$subdir/.gitrepo'. Commit it before running: git subrepo pull $subdir"
+    else
+      say "Now run: git subrepo pull $subdir"
+    fi
+  elif [[ $CODE -eq 1 ]]; then
+    error-join
+    return "$CODE"
+  else
+    die "Unknown retarget error code: '$CODE'"
   fi
   return 0
 }
@@ -410,10 +433,12 @@ status-print-diffstat() {
   local title=$1
   shift
   local diff_output
+  local indented_diff_output
   diff_output=$(git diff --stat "$@" 2> /dev/null) || return
   [[ $diff_output ]] || return
+  indented_diff_output=${diff_output//$'\n'/$'\n      '}
   echo "    $title diff:"
-  sed 's/^/      /' <<<"$diff_output"
+  printf '      %s\n' "$indented_diff_output"
 }
 
 # `git subrepo clean <subdir>` command
@@ -660,6 +685,119 @@ subrepo:pull() {
   CALL subrepo:commit
 }
 
+# Retarget a subrepo to a new upstream branch/remote:
+subrepo:retarget() {
+  if [[ $subrepo_remote == none ]]; then
+    error "Can't retarget subrepo. Remote is 'none' in '$gitrepo'."
+  fi
+
+  if $update_wanted; then
+    o "Update .gitrepo remote/branch for $subdir."
+    if [[ $override_remote ]]; then
+      RUN git config --file="$gitrepo" subrepo.remote "$subrepo_remote"
+    fi
+    if [[ $override_branch ]]; then
+      RUN git config --file="$gitrepo" subrepo.branch "$subrepo_branch"
+    fi
+  fi
+
+  CALL subrepo:fetch
+
+  local branch_name=subrepo/$subref
+  local worktree_created=false
+  local worktree_path=$GIT_TMP/$branch_name
+  local worktree_present=false
+  [[ -d $worktree_path ]] && worktree_present=true
+  if $force_wanted; then
+    worktree=$worktree_path
+    git:delete-branch "$branch_name"
+    worktree_present=false
+  fi
+  if ! git:branch-exists "$branch_name"; then
+    local previous_allow=$allow_divergent_history
+    allow_divergent_history=true
+    CALL subrepo:branch
+    allow_divergent_history=$previous_allow
+    if ! $worktree_present; then
+      worktree_created=true
+    fi
+  fi
+
+  worktree=$worktree_path
+  if [[ ! -d $worktree ]]; then
+    git:create-worktree "$branch_name"
+    worktree_created=true
+  fi
+
+  cd "$worktree"
+
+  FAIL=false OUT=true RUN git rev-parse -q --verify MERGE_HEAD
+  if OK; then
+    say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $subdir"
+    if $update_wanted && [[ $override_branch || $override_remote ]]; then
+      say "git-subrepo: '$subdir/.gitrepo' was updated. Commit it in $start_pwd before rerunning retarget."
+    fi
+    CODE=1
+    OK=false
+    return
+  fi
+
+  FAIL=false OUT=true RUN git symbolic-ref --short --quiet HEAD
+  if OK && [[ $output != "$branch_name" ]]; then
+    RUN git checkout "$branch_name"
+  fi
+
+  if git merge-base --is-ancestor "$refs_subrepo_fetch" HEAD; then
+    o "Retarget worktree already contains upstream."
+  elif [[ $join_method == rebase ]]; then
+    o "Rebase changes to $refs_subrepo_fetch"
+    FAIL=false OUT=true RUN git rebase "$refs_subrepo_fetch"
+    if ! OK; then
+      say "The \"git rebase\" command failed:"
+      say
+      say "  ${output//$'\n'/$'\n'  }"
+      say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $subdir"
+      if $update_wanted && [[ $override_branch || $override_remote ]]; then
+        say "git-subrepo: '$subdir/.gitrepo' was updated. Commit it in $start_pwd before rerunning retarget."
+      fi
+      CODE=1
+      OK=false
+      return
+    fi
+  else
+    o "Merge in changes from $refs_subrepo_fetch"
+    FAIL=false RUN git merge "$refs_subrepo_fetch"
+    if ! OK; then
+      say "The \"git merge\" command failed:"
+      say
+      say "  ${output//$'\n'/$'\n'  }"
+      say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $subdir"
+      if $update_wanted && [[ $override_branch || $override_remote ]]; then
+        say "git-subrepo: '$subdir/.gitrepo' was updated. Commit it in $start_pwd before rerunning retarget."
+      fi
+      CODE=1
+      OK=false
+      return
+    fi
+  fi
+
+  o "Back to $start_pwd"
+  cd "$start_pwd"
+
+  o "Push branch '$branch_name' to '$subrepo_remote' ($subrepo_branch)."
+  RUN git push "$subrepo_remote" "$branch_name":"$subrepo_branch"
+
+  o "Create ref '$refs_subrepo_branch' for branch '$branch_name'."
+  git:make-ref "$refs_subrepo_branch" "$branch_name"
+
+  o "Create ref '$refs_subrepo_push' for branch '$branch_name'."
+  git:make-ref "$refs_subrepo_push" "$branch_name"
+
+  if $worktree_created; then
+    git:remove-worktree
+  fi
+}
+
 # Push a properly merged subrepo branch upstream:
 subrepo:push() {
   local branch_name=$branch
@@ -872,8 +1010,10 @@ subrepo:branch() {
 
       o "Check for rebase"
       if git:rev-exists "$refs_subrepo_fetch"; then
-        if ! git:commit-in-rev-list  "$gitrepo_commit" "$refs_subrepo_fetch"; then
-          error "Local repository does not contain $gitrepo_commit. Try to 'git subrepo fetch $subref' or add the '-F' flag to always fetch the latest content."
+        if ! $allow_divergent_history && \
+          ! git:commit-in-rev-list "$gitrepo_commit" "$refs_subrepo_fetch"; then
+          error "Local history is not contained in upstream '$subrepo_remote' ($subrepo_branch).
+If you recently changed .gitrepo remote/branch, run: git subrepo retarget $subdir"
         fi
       fi
 
@@ -1321,6 +1461,11 @@ get-command-options() {
   fi
   commit_msg_args+=("${command_arguments[@]}")
 
+  # For retarget, branch/remote overrides should persist by default.
+  if [[ $command == retarget && ( $override_branch || $override_remote ) ]]; then
+    update_wanted=true
+  fi
+
   for option in all ALL edit fetch force squash; do
     var=${option}_wanted
     if ${!var}; then
@@ -1365,6 +1510,7 @@ options_fetch='all branch force remote'
 options_init='branch remote method'
 options_pull='all branch edit force message remote update'
 options_push='all branch force message remote squash update'
+options_retarget='all branch force remote update'
 options_status='ALL all fetch log log-limit diff'
 check_option() {
   local var=options_${command//-/_}
@@ -1415,7 +1561,7 @@ command-setup() {
     ) || true
     if [[ $command =~ ^(commit)$ && -z $_worktree ]]; then
       error "There is no worktree available, use the branch command first"
-    elif [[ ! $command =~ ^(branch|clean|commit|push)$ && $_worktree ]]; then
+    elif [[ ! $command =~ ^(branch|clean|commit|push|retarget)$ && $_worktree ]]; then
       if [[ -e $gitrepo ]]; then
         error "There is already a worktree with branch subrepo/$subdir.
 Use the --force flag to override this check or perform a subrepo clean
@@ -1761,7 +1907,7 @@ assert-repo-is-ready() {
 
 assert-working-copy-is-clean() {
   # Repo is in a clean state:
-  if [[ $command =~ ^(clone|init|pull|push|branch|commit)$ ]]; then
+  if [[ $command =~ ^(clone|init|pull|push|branch|commit|retarget)$ ]]; then
     # TODO: Should we check for untracked files?
     local pwd
     pwd=$(pwd)
@@ -1987,7 +2133,19 @@ This is the common conflict resolution workflow:
   7. git subrepo push $subdir $branch_name
 ...
   else
-    if [[ $commit_msg_file ]]; then
+    if [[ $command == retarget ]]; then
+      if $update_wanted && [[ $override_branch || $override_remote ]]; then
+    cat <<...
+  7. git add $subdir/.gitrepo
+  8. git commit -m "Retarget $subdir to $subrepo_remote ($subrepo_branch)"
+  9. git subrepo retarget $subdir
+...
+      else
+    cat <<...
+  7. git subrepo retarget $subdir
+...
+      fi
+    elif [[ $commit_msg_file ]]; then
     cat <<...
   7. git subrepo commit --file=$commit_msg_file $subdir
 ...
