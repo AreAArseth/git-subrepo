@@ -1290,7 +1290,9 @@ subrepo:status() {
           if git cat-file -e HEAD:"$subdir" 2> /dev/null; then
             subdir_tree=$(git rev-parse HEAD:"$subdir")
             if git:rev-exists "$subrepo_commit"; then
-              if git diff --quiet "$subrepo_commit" "$subdir_tree" 2> /dev/null; then
+              # '.gitrepo' exists in the subdir but never in the upstream root:
+              if git diff --quiet "$subrepo_commit" "$subdir_tree" \
+                -- . ':(exclude).gitrepo' 2> /dev/null; then
                 push_commits=()
                 push_count=0
               fi
@@ -1308,7 +1310,8 @@ subrepo:status() {
         fi
         if $status_diff_wanted && [[ $subrepo_commit && $subdir_tree ]]; then
           if git:rev-exists "$subrepo_commit"; then
-            status-print-diffstat "Local" "$subrepo_commit" "$subdir_tree"
+            status-print-diffstat "Local" "$subrepo_commit" "$subdir_tree" \
+              -- . ':(exclude).gitrepo'
           fi
         fi
       fi

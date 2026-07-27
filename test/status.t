@@ -150,6 +150,52 @@ clone-foo-and-bar
     "diff flag prints local diff header"
 }
 
-done_testing 24
+# 'bar' has a nested subrepo, so use a clean parent repo to compare a subrepo
+# whose content is identical to its upstream.
+{
+  (
+    cd "$OWNER/bar"
+    git subrepo clone "$UPSTREAM/foo"
+    add-new-files foo/tmpfile
+    remove-files foo/tmpfile
+  ) &> /dev/null || die
+
+  output=$(
+    cd "$OWNER/bar"
+    git subrepo status foo --log --diff
+  )
+
+  like "$output" "Push: *up to date" \
+    "status ignores .gitrepo when content matches upstream"
+
+  unlike "$output" "\.gitrepo" \
+    "status does not report .gitrepo as a local change"
+}
+
+{
+  (
+    cd "$OWNER/bar"
+    add-new-files foo/real-change.txt
+  ) &> /dev/null || die
+
+  output=$(
+    cd "$OWNER/bar"
+    git subrepo status foo --diff
+  )
+
+  like "$output" "Push: *3 commits" \
+    "status counts local content commits"
+
+  like "$output" "Local diff:" \
+    "diff flag prints local diff header for content change"
+
+  like "$output" "real-change.txt" \
+    "local diff lists the changed file"
+
+  unlike "$output" "\.gitrepo" \
+    "local diff excludes .gitrepo"
+}
+
+done_testing 30
 
 teardown
