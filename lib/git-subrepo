@@ -410,21 +410,25 @@ status-format-commit-count() {
 }
 
 # Assign 'push_commits' and 'push_count' with the parent repo commits that touch
-# the subdir since the recorded parent, minus the commit that synced '.gitrepo'
-# itself. Callers declare both as locals. Requires a valid $subrepo_parent.
+# the subdir since the recorded parent, leaving out the subrepo's own sync
+# commits. Any commit touching '.gitrepo' is such a sync: it either carries only
+# metadata, or it carries the content that a clone or pull brought down from
+# upstream, which is upstream's content and not something to push back. A wide
+# range can hold several of them. Callers declare both as locals. Requires a
+# valid $subrepo_parent.
 subrepo-pending-push-commits() {
-  local raw_commits=()
-  mapfile -t raw_commits < <(git rev-list "$subrepo_parent..HEAD" -- "$subdir")
-  local sync_commit=
-  sync_commit=$(git log -1 --format=%H "$subrepo_parent..HEAD" -- "$gitrepo") || true
+  local sync_commits=
+  sync_commits=$(git rev-list "$subrepo_parent..HEAD" -- "$gitrepo") || true
   push_commits=()
   local commit
-  for commit in "${raw_commits[@]}"; do
-    if [[ $sync_commit && $commit == "$sync_commit" ]]; then
+  while read -r commit; do
+    [[ $commit ]] || continue
+    # Both sides are full object names, so this match cannot straddle entries:
+    if [[ $sync_commits == *"$commit"* ]]; then
       continue
     fi
     push_commits+=("$commit")
-  done
+  done < <(git rev-list "$subrepo_parent..HEAD" -- "$subdir")
   push_count=${#push_commits[@]}
 }
 
@@ -1600,6 +1604,8 @@ command-prepare() {
     git:get-head-branch-commit
   fi
   original_head_commit=${output:-none}
+  # Per subrepo state, or a '--all' run leaks it into the next subrepo:
+  sync_point_recorded=false
 }
 
 # Do the setup steps needed by most of the subrepo subcommands:

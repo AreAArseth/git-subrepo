@@ -196,6 +196,31 @@ clone-foo-and-bar
     "local diff excludes .gitrepo"
 }
 
-done_testing 30
+# Commits that only touch '.gitrepo' are subrepo bookkeeping rather than local
+# content. A range can hold several of them and every one has to be left out.
+{
+  (
+    cd "$OWNER/bar"
+    git config --file foo/.gitrepo subrepo.cmdver "0.0.0-test"
+    git add foo/.gitrepo
+    git commit --quiet -m "first metadata-only change"
+    git config --file foo/.gitrepo subrepo.cmdver "0.0.1-test"
+    git add foo/.gitrepo
+    git commit --quiet -m "second metadata-only change"
+  ) &> /dev/null || die
+
+  output=$(
+    cd "$OWNER/bar"
+    git subrepo status foo --log
+  )
+
+  like "$output" "Push: *3 commits" \
+    "status leaves metadata-only commits out of the pending count"
+
+  unlike "$output" "metadata-only change" \
+    "status does not list metadata-only commits as pending"
+}
+
+done_testing 32
 
 teardown
