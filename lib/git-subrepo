@@ -979,17 +979,6 @@ subrepo:branch() {
     for commit in $commit_list; do
       o "Working on $commit"
 
-      FAIL=false OUT=true RUN git config --blob \
-        "$commit:$subdir/.gitrepo" "subrepo.commit"
-      if [[ -z $output ]]; then
-        o "Ignore commit, no .gitrepo file"
-        continue
-      fi
-
-      local gitrepo_commit=$output
-      o ".gitrepo reference commit: $gitrepo_commit"
-
-
       # Only include the commit if it's a child of the previous commit
       # This way we create a single path between $subrepo_parent..HEAD
       if [[ $ancestor ]]; then
@@ -1005,8 +994,21 @@ subrepo:branch() {
         fi
       fi
 
-      # Remember the previous commit from the parent repo path
+      # Remember the previous commit from the parent repo path. The path has to
+      # advance even for commits that are not recreated below, or every later
+      # commit is a child of a commit that was left out and the path never
+      # reaches HEAD.
       ancestor=$commit
+
+      FAIL=false OUT=true RUN git config --blob \
+        "$commit:$subdir/.gitrepo" "subrepo.commit"
+      if [[ -z $output ]]; then
+        o "Ignore commit, no .gitrepo file"
+        continue
+      fi
+
+      local gitrepo_commit=$output
+      o ".gitrepo reference commit: $gitrepo_commit"
 
       o "Check for rebase"
       if git:rev-exists "$refs_subrepo_fetch"; then

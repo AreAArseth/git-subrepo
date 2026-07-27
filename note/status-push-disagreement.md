@@ -17,8 +17,8 @@ These were two independent defects:
 
 1. A false positive in the status implementation, because its content
    comparison included `.gitrepo`. **Fixed**, see "Issue 1" below.
-2. An ancestry-reconstruction problem in normal, non-squashed push. **Root
-   cause identified, not yet fixed**, see "Issue 2" below.
+2. An ancestry-reconstruction problem in normal, non-squashed push. **Fixed**,
+   see "Issue 2" below.
 
 ## Conditions
 
@@ -159,7 +159,7 @@ repository, the leading `.` in the pathspec is always the whole tree.
 that a local content change produces a `Local diff` naming the changed file and
 never `.gitrepo`.
 
-## Issue 2: normal push reconstructs history without current upstream
+## Issue 2: normal push reconstructs history without current upstream (fixed)
 
 Normal push rebuilds `subrepo/<subdir>` from the parent-repository commits
 between the recorded pull parent and `HEAD`. The branch builder in
@@ -197,8 +197,8 @@ list. So on graph shape alone the greedy chain can never dead-end: whichever
 fork it takes, the merge commit that rejoins the forks has the current chain
 tip as one of its parents and is accepted.
 
-What actually severs the chain is the `.gitrepo` presence check, which runs
-*before* the direct-child check and skips the commit without advancing the
+What actually severed the chain was the `.gitrepo` presence check, which ran
+*before* the direct-child check and skipped the commit without advancing the
 recorded ancestor:
 
 ```bash
@@ -210,12 +210,13 @@ if [[ -z $output ]]; then
 fi
 ```
 
-Once a commit in the range has no `.gitrepo` file, or a `.gitrepo` from which
-`subrepo.commit` cannot be read, the chain tip stays behind that commit. Every
-later commit is then a child of the skipped commit rather than of the tip, so
-all of them, `HEAD` included, are rejected as "not in the selected path". The
-branch stops at whatever commit happened to be the tip, which is why it carries
-an old `.gitrepo` commit as its merge parent and fails containment.
+Once a commit in the range had no `.gitrepo` file, or a `.gitrepo` from which
+`subrepo.commit` could not be read, the chain tip stayed behind that commit.
+Every later commit was then a child of the skipped commit rather than of the
+tip, so all of them, `HEAD` included, were rejected as "not in the selected
+path". The branch stopped at whatever commit happened to be the tip, which is
+why it carried an old `.gitrepo` commit as its merge parent and failed
+containment.
 
 Verbose output from the reproduction, with the chain dying one commit before
 the removal:
@@ -228,31 +229,51 @@ the removal:
 * Ignore <next commit>, it's not in the selected path
 ```
 
-### Reproduction test
+### Fix
 
-`test/branch-merge-upstream.t` reproduces all three symptoms: the branch does
-not contain the upstream HEAD, its tree does not match the current subdir, and
-`git subrepo push` fails with `doesn't contain upstream HEAD`.
-
-It is skipped by default so the suite stays green. Run it with:
-
-```bash
-GIT_SUBREPO_TEST_KNOWN_FAILURES=1 prove -v test/branch-merge-upstream.t
-```
-
-### Candidate direction
-
-Whatever the fix, the reconstructed branch must satisfy both invariants before
-push:
+The reconstructed branch has to satisfy both invariants before push:
 
 1. It contains the fetched upstream HEAD.
 2. Its root tree, excluding `.gitrepo`, equals the current subdirectory tree.
 
-Both follow if the chain is guaranteed to end at `HEAD`, because `HEAD`'s
-`.gitrepo` records the upstream commit that push has already verified, and
-`HEAD`'s subdir tree is the tree being pushed.
+Both follow once the chain is guaranteed to end at `HEAD`, because `HEAD`'s
+`.gitrepo` records the upstream commit that push has already verified against
+the fetched upstream, and `HEAD`'s subdir tree is the tree being pushed.
 
-A first-parent traversal is the obvious candidate:
+Path selection and content recreation are now separate concerns. The
+direct-child check and the `ancestor=$commit` assignment both run *before* the
+`.gitrepo` lookup, so a commit that cannot be recreated still advances the
+selected path:
+
+```bash
+if [[ $ancestor ]]; then
+  # reject commits that are not a direct child of the current tip
+fi
+
+ancestor=$commit
+
+FAIL=false OUT=true RUN git config --blob \
+  "$commit:$subdir/.gitrepo" "subrepo.commit"
+if [[ -z $output ]]; then
+  o "Ignore commit, no .gitrepo file"
+  continue
+fi
+```
+
+That is enough to guarantee the chain reaches `HEAD`. Let `T` be the final tip
+and suppose `T` is not `HEAD`. `T` is in range, so it is an ancestor of `HEAD`,
+so it has a direct child `D` that is also in range. Topological ordering puts
+`D` after `T` in the list, and nothing after `T` was accepted, so the tip was
+still `T` when `D` was processed. `D` is a direct child of `T`, so `D` would
+have been accepted, contradicting that `T` is final.
+
+Note that a commit which removes the subdir is still not recreated, so the
+reconstructed history jumps straight from the content before the removal to the
+content after it is restored. The final tree is `HEAD`'s subdir either way.
+
+### Rejected alternative
+
+A first-parent traversal was considered:
 
 ```bash
 git rev-list --reverse --first-parent "$subrepo_parent..HEAD"
@@ -262,17 +283,19 @@ This does not survive contact with the existing tests. `test/branch-rev-list.t`
 pushes in the middle of its fixture specifically so that `subrepo_parent` ends
 up on a *second* parent, commented "We push here to force subrepo to handle
 histories where it's not first parent". A strict first-parent range excludes
-that commit.
+that commit. Rewriting the walk to run backwards from `HEAD` would also work,
+but it is unnecessary: the forward walk already reaches `HEAD` once the path
+stops being severed.
 
-A better shape is to build the chain backwards from `HEAD` instead of forwards
-from `subrepo_parent`: at each step take the first parent that is still on an
-ancestry path to `subrepo_parent`, falling back to later parents. That is
-deterministic, follows the mainline, reproduces the path the existing tests
-already assert, and terminates at `HEAD` by construction. Commits with no
-readable `.gitrepo` then only need their content skipped, not the whole chain
-abandoned.
+### Regression test
 
-## Why `--squash` behaves differently
+`test/branch-merge-upstream.t` covers the three original symptoms, that a real
+local change still pushes afterwards, and that `--squash` still works. Against
+the unfixed `subrepo:branch`, 10 of its 14 assertions fail. The two `--squash`
+assertions pass either way, which is consistent with squash bypassing the
+reconstruction entirely.
+
+## Why `--squash` behaved differently
 
 For squash mode, `subrepo:push` sets:
 
@@ -283,42 +306,37 @@ subrepo_parent=HEAD^
 The branch builder therefore creates a single cumulative subtree snapshot whose
 additional parent is the recorded upstream commit. After `.gitrepo` is removed,
 that snapshot is empty relative to the upstream commit and is pruned back to
-it, so the command reports no new commits. This avoids the faulty reconstruction
-of hundreds of individual parent-repo commits.
+it, so the command reports no new commits. This bypasses the reconstruction of
+hundreds of individual parent-repo commits, and with it the defect.
 
-## Impact
+## Original impact
 
-- Operators see large false-positive push counts.
-- A no-op normal push takes roughly 90 seconds before failing.
-- The failure suggests missing upstream reconciliation even though content is
+- Operators saw large false-positive push counts.
+- A no-op normal push took roughly 90 seconds before failing.
+- The failure suggested missing upstream reconciliation even though content was
   already equal.
-- Users may be tempted to use `--force`, which would bypass the correct ancestry
+- Users were tempted to use `--force`, which bypasses the correct ancestry
   safety check and is unsafe on protected branches.
-- Automation cannot reliably distinguish real subrepo content from
-  parent-repository history using the current status output alone.
+- Automation could not reliably distinguish real subrepo content from
+  parent-repository history using the status output alone.
 
-## Remaining regression tests to add with the Issue 2 fix
+## Still open
 
-### Real local content still pushes
+### Normal and squash push do not always agree for content parity
 
-1. Start from the same complex history.
-2. Modify one real subrepo file.
-3. Confirm status reports a pending content change.
-4. Confirm both normal and squash modes produce branches containing upstream and
-   the modified file.
+It would be reasonable to expect both normal push and squash push to conclude
+there is nothing to push when local and upstream content match. That does not
+hold unconditionally, and it is not clear that it should. Normal push
+legitimately preserves intermediate parent-repository commits whose net content
+change is zero, and `filter-branch --prune-empty` only drops commits that become
+empty, not commits that change content and change it back.
 
-### Normal and squash push agree for content parity
+Decide the intended behaviour before pinning this one. If a no-op normal push
+should short-circuit the way `--squash` does, the cheap check is a content
+comparison excluding `.gitrepo` before the branch is reconstructed, which would
+also remove the 90-second no-op.
 
-Assert that both normal push and squash push conclude there is nothing to push
-when local and upstream content match.
-
-Note that this may not hold unconditionally even after the reconstruction is
-fixed. Normal push legitimately preserves intermediate parent-repository commits
-whose net content change is zero, and `filter-branch --prune-empty` only drops
-commits that become empty, not commits that change content and change it back.
-Confirm the intended behaviour before pinning this one.
-
-## Workaround
+## Diagnosis
 
 To check by hand whether a subrepo has real content to push:
 

@@ -8,14 +8,13 @@ use Test::More
 
 # 'subrepo:branch' walks '$subrepo_parent..HEAD' forward and keeps a commit
 # only when it is a direct child of the last kept one. A commit with no
-# '.gitrepo' file is skipped without advancing that ancestor, which severs the
-# chain: every later commit, including HEAD, is then rejected as "not in the
-# selected path". The reconstructed branch stops early, so it neither contains
-# the current upstream nor matches the current subdir tree.
+# readable '.gitrepo' is not recreated, but it still has to advance that
+# ancestor, or every later commit is a child of a commit that was left out and
+# the whole path is rejected as "not in the selected path". The reconstructed
+# branch then stops early, so it neither contains the current upstream nor
+# matches the current subdir tree.
 #
 # See note/status-push-disagreement.md.
-[[ ${GIT_SUBREPO_TEST_KNOWN_FAILURES-} ]] ||
-  plan skip_all "Known failure, see note/status-push-disagreement.md"
 
 clone-foo-and-bar
 
@@ -53,15 +52,15 @@ subrepo-clone-bar-into-foo
   add-new-files bar/m3
 ) >& /dev/null || die
 
-note "$(cd "$OWNER/foo"; git log --graph --oneline)"
-
 branch_output=$(
   cd "$OWNER/foo"
   git subrepo clean bar > /dev/null
   catch git subrepo -F branch bar
 )
 
-note "branch output: $branch_output"
+is "$branch_output" \
+  "Created branch 'subrepo/bar' and worktree '.git/tmp/subrepo/bar'." \
+  "subrepo branch command output is correct"
 
 contains_upstream=0
 (
@@ -80,18 +79,67 @@ is "$(
   "" \
   "reconstructed branch tree matches the subdir, ignoring .gitrepo"
 
-push_output=$(
+is "$(
   cd "$OWNER/foo"
   git subrepo clean bar > /dev/null
   catch git subrepo push bar
-)
+)" \
+  "Subrepo 'bar' pushed to '$UPSTREAM/bar' (master)." \
+  "push accepts its own reconstructed branch"
 
-note "push output: $push_output"
+(
+  cd "$OWNER/bar"
+  git pull
+) >& /dev/null || die
 
-unlike "$push_output" \
-  "doesn't contain upstream HEAD" \
-  "push does not reject its own reconstructed branch"
+test-exists \
+  "$OWNER/bar/m1" \
+  "$OWNER/bar/m2" \
+  "$OWNER/bar/m3" \
+  "$OWNER/bar/s1" \
+  "$OWNER/bar/s2" \
+  "!$OWNER/bar/.gitrepo" \
 
-done_testing 3
+# A real local change must still reach upstream from the same history.
+(
+  cd "$OWNER/foo"
+  add-new-files bar/real-change.txt
+) >& /dev/null || die
+
+is "$(
+  cd "$OWNER/foo"
+  catch git subrepo push bar
+)" \
+  "Subrepo 'bar' pushed to '$UPSTREAM/bar' (master)." \
+  "a real local change still pushes"
+
+(
+  cd "$OWNER/bar"
+  git pull
+) >& /dev/null || die
+
+test-exists "$OWNER/bar/real-change.txt"
+
+# And with --squash, which reconstructs a single snapshot instead.
+(
+  cd "$OWNER/foo"
+  add-new-files bar/squashed-change.txt
+) >& /dev/null || die
+
+is "$(
+  cd "$OWNER/foo"
+  catch git subrepo push bar --squash
+)" \
+  "Subrepo 'bar' pushed to '$UPSTREAM/bar' (master)." \
+  "a real local change still pushes with --squash"
+
+(
+  cd "$OWNER/bar"
+  git pull
+) >& /dev/null || die
+
+test-exists "$OWNER/bar/squashed-change.txt"
+
+done_testing 14
 
 teardown
