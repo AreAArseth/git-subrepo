@@ -150,6 +150,77 @@ clone-foo-and-bar
     "diff flag prints local diff header"
 }
 
-done_testing 24
+# 'bar' has a nested subrepo, so use a clean parent repo to compare a subrepo
+# whose content is identical to its upstream.
+{
+  (
+    cd "$OWNER/bar"
+    git subrepo clone "$UPSTREAM/foo"
+    add-new-files foo/tmpfile
+    remove-files foo/tmpfile
+  ) &> /dev/null || die
+
+  output=$(
+    cd "$OWNER/bar"
+    git subrepo status foo --log --diff
+  )
+
+  like "$output" "Push: *up to date" \
+    "status ignores .gitrepo when content matches upstream"
+
+  unlike "$output" "\.gitrepo" \
+    "status does not report .gitrepo as a local change"
+}
+
+{
+  (
+    cd "$OWNER/bar"
+    add-new-files foo/real-change.txt
+  ) &> /dev/null || die
+
+  output=$(
+    cd "$OWNER/bar"
+    git subrepo status foo --diff
+  )
+
+  like "$output" "Push: *3 commits" \
+    "status counts local content commits"
+
+  like "$output" "Local diff:" \
+    "diff flag prints local diff header for content change"
+
+  like "$output" "real-change.txt" \
+    "local diff lists the changed file"
+
+  unlike "$output" "\.gitrepo" \
+    "local diff excludes .gitrepo"
+}
+
+# Commits that only touch '.gitrepo' are subrepo bookkeeping rather than local
+# content. A range can hold several of them and every one has to be left out.
+{
+  (
+    cd "$OWNER/bar"
+    git config --file foo/.gitrepo subrepo.cmdver "0.0.0-test"
+    git add foo/.gitrepo
+    git commit --quiet -m "first metadata-only change"
+    git config --file foo/.gitrepo subrepo.cmdver "0.0.1-test"
+    git add foo/.gitrepo
+    git commit --quiet -m "second metadata-only change"
+  ) &> /dev/null || die
+
+  output=$(
+    cd "$OWNER/bar"
+    git subrepo status foo --log
+  )
+
+  like "$output" "Push: *3 commits" \
+    "status leaves metadata-only commits out of the pending count"
+
+  unlike "$output" "metadata-only change" \
+    "status does not list metadata-only commits as pending"
+}
+
+done_testing 32
 
 teardown

@@ -280,6 +280,19 @@ help:push() {
   After that, the `push` command just checks that the branch contains the
   upstream HEAD and then pushes it upstream.
 
+  If the `subdir` content is already identical to the upstream commit recorded
+  in `<subdir>/.gitrepo` (the `.gitrepo` file itself is never compared, since it
+  does not exist upstream), then there is nothing to contribute and `push`
+  reports that it has no new commits. It does not reconstruct the local history
+  in that case, and it records the sync point in `<subdir>/.gitrepo` so that
+  later `push` and `status` commands do not have to consider the same range
+  again.
+
+  This means local subrepo commits whose net effect on the content is nothing
+  new to upstream are not pushed. To send such history upstream deliberately,
+  reconstruct it with `git subrepo branch <subdir>` and push that branch
+  explicitly with `git subrepo push <subdir> subrepo/<subdir>`.
+
   The `--force` option will do a force push. Force pushes are typically
   discouraged. Only use this option if you fully understand it. (The `--force`
   option will NOT check for a proper merge. ANY branch will be force pushed!)
