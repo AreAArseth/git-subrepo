@@ -104,6 +104,7 @@ main() {
   local fetch_wanted=false      # Fetch requested before a command
   local squash_wanted=false     # Squash commits on push
   local update_wanted=false     # Update .gitrepo with --branch and/or --remote
+  local sync_point_recorded=false # Push only recorded a '.gitrepo' sync point
 
   local quiet_wanted=false      # Output should be quiet
   local verbose_wanted=false    # Output should be verbose
@@ -302,6 +303,9 @@ command:push() {
     say "Subrepo '$subdir' pushed to '$subrepo_remote' ($subrepo_branch)."
   elif [[ $CODE -eq -2 ]]; then
     say "Subrepo '$subdir' has no new commits to push."
+  elif [[ $CODE -eq -3 ]]; then
+    say "Subrepo '$subdir' has no new commits to push."
+    say "Recorded the sync point in '$gitrepo'."
   elif [[ $CODE -eq 1 ]]; then
     error-join
     return "$CODE"
@@ -403,6 +407,37 @@ status-format-commit-count() {
     (( count == 1 )) || label+=s
     printf '%d %s' "$count" "$label"
   fi
+}
+
+# Assign 'push_commits' and 'push_count' with the parent repo commits that touch
+# the subdir since the recorded parent, minus the commit that synced '.gitrepo'
+# itself. Callers declare both as locals. Requires a valid $subrepo_parent.
+subrepo-pending-push-commits() {
+  local raw_commits=()
+  mapfile -t raw_commits < <(git rev-list "$subrepo_parent..HEAD" -- "$subdir")
+  local sync_commit=
+  sync_commit=$(git log -1 --format=%H "$subrepo_parent..HEAD" -- "$gitrepo") || true
+  push_commits=()
+  local commit
+  for commit in "${raw_commits[@]}"; do
+    if [[ $sync_commit && $commit == "$sync_commit" ]]; then
+      continue
+    fi
+    push_commits+=("$commit")
+  done
+  push_count=${#push_commits[@]}
+}
+
+# Succeed when the subdir content is identical to the upstream commit that
+# '.gitrepo' records. '.gitrepo' lives in the subdir but never in the upstream
+# root, so it can never be part of a real difference.
+subrepo-content-matches-upstream() {
+  [[ $subrepo_commit ]] || return 1
+  git cat-file -e HEAD:"$subdir" 2> /dev/null || return 1
+  git:rev-exists "$subrepo_commit" || return 1
+  local tree=
+  tree=$(git rev-parse HEAD:"$subdir") || return 1
+  git diff --quiet "$subrepo_commit" "$tree" -- . ':(exclude).gitrepo' 2> /dev/null
 }
 
 status-print-log-lines() {
@@ -828,6 +863,31 @@ subrepo:push() {
       fi
     fi
 
+    # Matching content means there is nothing to contribute upstream, even when
+    # the parent repo has a history of its own over the subdir. Record the sync
+    # point, or every later invocation reconstructs the same range again.
+    if ! $force_wanted && ! $new_upstream &&
+       [[ $subrepo_commit == "$upstream_head_commit" ]] &&
+       subrepo-content-matches-upstream; then
+      o "Subdir content already matches upstream."
+      local push_commits=()
+      local push_count=0
+      if [[ $subrepo_parent ]] && git:rev-exists "$subrepo_parent"; then
+        subrepo-pending-push-commits
+      fi
+      if (( push_count > 0 )); then
+        o "Record the sync point for $push_count local commit(s)."
+        sync_point_recorded=true
+        subrepo_commit_ref=$upstream_head_commit
+        update-gitrepo-file
+        local sync_message=$wanted_commit_message
+        [[ $sync_message ]] || sync_message=$(get-commit-message)
+        RUN git commit -m "$sync_message"
+        OK=false; CODE=-3; return
+      fi
+      OK=false; CODE=-2; return
+    fi
+
     branch_name=subrepo/$subref
     # We must make sure that a stale worktree is removed as well
     worktree=$GIT_TMP/$branch_name
@@ -879,7 +939,9 @@ subrepo:push() {
     fi
   fi
 
-  if ! $force_wanted; then
+  # There is no upstream head to check against when a branch was named
+  # explicitly, since that path does not fetch:
+  if ! $force_wanted && [[ $upstream_head_commit ]]; then
     o "Make sure '$branch_name' contains the '$refs_subrepo_fetch' HEAD."
     if ! git:commit-in-rev-list "$upstream_head_commit" "$branch_name"; then
       error "Can't commit: '$branch_name' doesn't contain upstream HEAD: " \
@@ -973,6 +1035,10 @@ subrepo:branch() {
 
     local prev_commit=
     local ancestor=
+    # Both are loop invariant, so check them once for the whole range:
+    local fetch_exists=false
+    git:rev-exists "$refs_subrepo_fetch" && fetch_exists=true
+    local checked_gitrepo_commit=
     o "Create new commits with parents into the subrepo fetch"
     OUT=true RUN git rev-list --reverse --ancestry-path --topo-order "$subrepo_parent..HEAD"
     local commit_list=$output
@@ -1010,13 +1076,16 @@ subrepo:branch() {
       local gitrepo_commit=$output
       o ".gitrepo reference commit: $gitrepo_commit"
 
-      o "Check for rebase"
-      if git:rev-exists "$refs_subrepo_fetch"; then
-        if ! $allow_divergent_history && \
-          ! git:commit-in-rev-list "$gitrepo_commit" "$refs_subrepo_fetch"; then
+      # Check for rebase. The same reference commit repeats across most of the
+      # range, so only verify it when it actually changes.
+      if $fetch_exists && ! $allow_divergent_history &&
+         [[ $gitrepo_commit != "$checked_gitrepo_commit" ]]; then
+        o "Check for rebase"
+        if ! git:commit-in-rev-list "$gitrepo_commit" "$refs_subrepo_fetch"; then
           error "Local history is not contained in upstream '$subrepo_remote' ($subrepo_branch).
 If you recently changed .gitrepo remote/branch, run: git subrepo retarget $subdir"
         fi
+        checked_gitrepo_commit=$gitrepo_commit
       fi
 
       o "Find parents"
@@ -1076,8 +1145,10 @@ If you recently changed .gitrepo remote/branch, run: git subrepo retarget $subdi
   o "Remove the .gitrepo file from $first_gitrepo_commit..$branch"
   local filter=$branch
   [[ $first_gitrepo_commit ]] && filter=$first_gitrepo_commit..$branch
-  FAIL=false RUN git filter-branch -f --prune-empty --tree-filter \
-    "rm -f .gitrepo" -- "$filter" --first-parent
+  # An index filter never touches the filesystem, unlike a tree filter which
+  # checks out every tree in the range just to delete one file:
+  FAIL=false RUN git filter-branch -f --prune-empty --index-filter \
+    "git rm --cached -q --ignore-unmatch .gitrepo" -- "$filter" --first-parent
 
   git:create-worktree "$branch"
 
@@ -1275,31 +1346,14 @@ subrepo:status() {
     if [[ $subrepo_parent ]]; then
       if git:rev-exists "$subrepo_parent"; then
         push_data_available=true
-        local raw_commits=()
-        mapfile -t raw_commits < <(git rev-list "$subrepo_parent..HEAD" -- "$subdir")
-        local sync_commit=
-        sync_commit=$(git log -1 --format=%H "$subrepo_parent..HEAD" -- "$gitrepo") || true
-        local commit
-        for commit in "${raw_commits[@]}"; do
-          if [[ $sync_commit && $commit == "$sync_commit" ]]; then
-            continue
-          fi
-          push_commits+=("$commit")
-        done
-        push_count=${#push_commits[@]}
+        subrepo-pending-push-commits
 
-        if [[ $subrepo_commit ]]; then
-          if git cat-file -e HEAD:"$subdir" 2> /dev/null; then
-            subdir_tree=$(git rev-parse HEAD:"$subdir")
-            if git:rev-exists "$subrepo_commit"; then
-              # '.gitrepo' exists in the subdir but never in the upstream root:
-              if git diff --quiet "$subrepo_commit" "$subdir_tree" \
-                -- . ':(exclude).gitrepo' 2> /dev/null; then
-                push_commits=()
-                push_count=0
-              fi
-            fi
-          fi
+        if git cat-file -e HEAD:"$subdir" 2> /dev/null; then
+          subdir_tree=$(git rev-parse HEAD:"$subdir")
+        fi
+        if subrepo-content-matches-upstream; then
+          push_commits=()
+          push_count=0
         fi
       fi
     fi
@@ -2024,10 +2078,12 @@ get-commit-message() {
     merged=$(git rev-parse --short "$subrepo_commit_ref")
   fi
 
-  local is_merge=''
-  if [[ $command != push ]]; then
+  local marker=''
+  if $sync_point_recorded; then
+    marker=" (sync)"
+  elif [[ $command != push ]]; then
     if git:is_merge_commit "$subrepo_commit_ref"; then
-      is_merge=" (merge)"
+      marker=" (merge)"
     fi
   fi
 
@@ -2035,7 +2091,7 @@ get-commit-message() {
 
   # Format subrepo commit message:
   cat <<...
-git subrepo $command$is_merge ${args[*]}
+git subrepo $command$marker ${args[*]}
 
 subrepo:
   subdir:   "$subdir"
@@ -2214,7 +2270,8 @@ git:get-head-branch-commit() {
 git:commit-in-rev-list() {
   local commit=$1
   local list_head=$2
-  git rev-list "$list_head" | grep -q "^$commit"
+  # Reachability, not a full walk: this is called once per commit of a range.
+  git merge-base --is-ancestor "$commit" "$list_head" 2> /dev/null
 }
 
 git:make-ref() {

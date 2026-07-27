@@ -13,21 +13,25 @@ refused to push its own reconstructed branch. In the same state:
 - A direct tree comparison confirmed that the only difference was the local
   `.gitrepo` metadata file, which must not be pushed upstream.
 
-These were two independent defects:
+These were three independent defects:
 
 1. A false positive in the status implementation, because its content
    comparison included `.gitrepo`. **Fixed**, see "Issue 1" below.
 2. An ancestry-reconstruction problem in normal, non-squashed push. **Fixed**,
    see "Issue 2" below.
+3. A push with nothing to contribute still reconstructed the whole range and
+   recorded no sync point, so the cost recurred on every invocation. **Fixed**,
+   see "Issue 3" below.
 
 ## Conditions
 
 Both defects need a parent repository that has lived for a while:
 
-- The subrepo was cloned long ago and pulled since. `git subrepo pull` does not
-  update the `parent` field in `.gitrepo`, so `parent` stays at the original
-  clone point while `commit` tracks the latest pull. Every repository that has
-  been pulled therefore has a very wide `$subrepo_parent..HEAD` range.
+- The subrepo was cloned long ago and pulled since. A merge-method
+  `git subrepo pull` that merges anything local does not update the `parent`
+  field in `.gitrepo`, so `parent` stays at the original clone point while
+  `commit` tracks the latest pull. Every such repository has a very wide
+  `$subrepo_parent..HEAD` range. See "Issue 3" for the exact rule.
 - Many parent-repository commits touch the subdirectory after that recorded
   parent.
 - The history between the recorded parent and `HEAD` contains merges.
@@ -295,6 +299,145 @@ the unfixed `subrepo:branch`, 10 of its 14 assertions fail. The two `--squash`
 assertions pass either way, which is consistent with squash bypassing the
 reconstruction entirely.
 
+## Issue 3: a push with nothing to contribute paid for the whole range (fixed)
+
+Fixing Issue 2 made the reconstruction reach `HEAD`, so normal push stopped
+failing. It did not make it cheap. Push reconstructed every commit in
+`$subrepo_parent..HEAD` before it could compare the result against upstream, and
+that is where the roughly 90 seconds went.
+
+Worse, the outcome was not recorded. When push concluded there was nothing to
+send it returned at `CODE=-2` *before* `update-gitrepo-file`, so `.gitrepo` was
+left untouched and the next invocation reconstructed exactly the same range
+again. This is also why `--squash` reporting "no new commits" never helped: it
+took the same early return.
+
+### Why the range grows without bound
+
+`update-gitrepo-file` advances `parent` only when the reconstructed branch
+resolves exactly to the upstream HEAD:
+
+```bash
+# Only write new parent when we are at the head of upstream
+if [[ $upstream_head_commit && $subrepo_commit_ref ]]; then
+  OUT=true RUN git rev-parse "$subrepo_commit_ref"
+  if [[ $upstream_head_commit == "$output" ]]; then
+    RUN git config --file="$gitrepo" subrepo.parent "$original_head_commit"
+  fi
+fi
+```
+
+Push satisfies that trivially, because it sets `subrepo_commit_ref` to the
+upstream commit it just pushed. A merge-method pull does not: it merges upstream
+into the reconstructed branch, so `subrepo_commit_ref` is a merge commit
+whenever anything local was merged. That is coherent as a definition of a sync
+point, since local commits that are not upstream do still need pushing. The
+consequence is that a repository which pulls often and pushes rarely keeps
+`parent` at the last push, and the range that both `status` and `push` have to
+consider only grows.
+
+### Fix
+
+Push now checks content parity before reconstructing anything, using the same
+comparison `status` uses:
+
+```bash
+if ! $force_wanted && ! $new_upstream &&
+   [[ $subrepo_commit == "$upstream_head_commit" ]] &&
+   subrepo-content-matches-upstream; then
+```
+
+If the subdir content already matches the recorded upstream commit there is
+nothing to contribute, so the reconstruction is skipped entirely. When the range
+did contain local commits, push also records the sync point: it sets
+`subrepo_commit_ref` to the upstream commit so the guard above passes, calls
+`update-gitrepo-file`, and commits the result with a `git subrepo push (sync)`
+subject. Later `push` and `status` commands then start from that point instead
+of walking the same history again.
+
+The sync commit is only made when there was actually pending history. Straight
+after a clone the only commit touching the subdir is the sync commit itself, so
+a push there stays a plain no-op that changes nothing, which is what
+`test/push-no-changes.t` and `test/push-after-push-no-changes.t` expect.
+
+The parity comparison and the pending-commit walk are now shared helpers,
+`subrepo-content-matches-upstream` and `subrepo-pending-push-commits`, used by
+both `subrepo:status` and `subrepo:push`. The two commands cannot disagree about
+what is pending, which was the original complaint.
+
+### Behaviour change
+
+Content parity now means there is nothing to push, so local subrepo commits
+whose net content change is nothing new to upstream are no longer sent. Before
+this change they were: individually they are not empty, so
+`filter-branch --prune-empty` kept them and push duplicated content-redundant
+history upstream. Nothing is lost in terms of content. To send such history
+deliberately, reconstruct it and push that branch explicitly:
+
+```bash
+git subrepo branch <subdir>
+git subrepo push <subdir> subrepo/<subdir>
+```
+
+`test/push-content-parity.t` covers both directions, including that the explicit
+branch still carries net-zero commits upstream.
+
+### Reconstruction cost
+
+Two hot spots made the reconstruction itself slow, independently of how often it
+ran.
+
+`.gitrepo` was stripped with `filter-branch --tree-filter "rm -f .gitrepo"`,
+which checks out every tree in the range to the filesystem just to delete one
+file. An index filter does the same work without touching the worktree:
+
+```bash
+git filter-branch -f --prune-empty --index-filter \
+  "git rm --cached -q --ignore-unmatch .gitrepo" -- "$filter" --first-parent
+```
+
+The rebase check in `subrepo:branch` ran once per commit, and
+`git:commit-in-rev-list` implemented reachability as a full walk piped through
+`grep`:
+
+```bash
+git rev-list "$list_head" | grep -q "^$commit"
+```
+
+That is now `git merge-base --is-ancestor`, which is also stricter, since the
+old prefix match could accept an unrelated commit sharing a SHA prefix. The
+reference commit being checked repeats across most of the range, so the check
+now only runs when it changes, and the `git:rev-exists` guard was hoisted out of
+the loop.
+
+One call site relied on the old behaviour by accident: with an explicit branch
+argument push does not fetch, so `upstream_head_commit` is empty and the old
+empty-pattern `grep` matched anything. That containment check is now explicitly
+skipped when there is no upstream head to check against.
+
+### Measured
+
+A fixture with 401 parent-repo commits touching the subdir since the recorded
+parent, upstream history around 200 commits:
+
+| scenario                          | before  | after  |
+| --------------------------------- | ------- | ------ |
+| content already matches upstream  | 36.2s   | 0.4s   |
+| one real new file in the subdir   | 35.8s   | 26.8s  |
+
+The first row is not a like-for-like comparison of outcomes: the old code did
+not spend 36 seconds concluding there was nothing to do, it reconstructed the
+range and pushed that content-redundant history upstream. That is the behaviour
+change described above, and the timing is what an operator waited for either
+way.
+
+The second row is the reconstruction cost, which both versions pay. Attributing
+it, with each change applied on its own: the index filter accounts for nearly
+all of it (36.8s to 29.8s), and skipping the repeated rebase check for the rest.
+The `merge-base` swap on its own was neutral at this scale, where process startup
+dominates a 200-commit walk; it matters for long upstream histories, and it is
+kept for the stricter comparison regardless.
+
 ## Why `--squash` behaved differently
 
 For squash mode, `subrepo:push` sets:
@@ -307,34 +450,20 @@ The branch builder therefore creates a single cumulative subtree snapshot whose
 additional parent is the recorded upstream commit. After `.gitrepo` is removed,
 that snapshot is empty relative to the upstream commit and is pruned back to
 it, so the command reports no new commits. This bypasses the reconstruction of
-hundreds of individual parent-repo commits, and with it the defect.
+hundreds of individual parent-repo commits, and with it the Issue 2 defect. It
+did not avoid the Issue 3 cost, because it still reconstructed a snapshot of the
+whole range and still recorded nothing.
 
 ## Original impact
 
 - Operators saw large false-positive push counts.
-- A no-op normal push took roughly 90 seconds before failing.
+- A no-op normal push took roughly 90 seconds before failing, every time.
 - The failure suggested missing upstream reconciliation even though content was
   already equal.
 - Users were tempted to use `--force`, which bypasses the correct ancestry
   safety check and is unsafe on protected branches.
 - Automation could not reliably distinguish real subrepo content from
   parent-repository history using the status output alone.
-
-## Still open
-
-### Normal and squash push do not always agree for content parity
-
-It would be reasonable to expect both normal push and squash push to conclude
-there is nothing to push when local and upstream content match. That does not
-hold unconditionally, and it is not clear that it should. Normal push
-legitimately preserves intermediate parent-repository commits whose net content
-change is zero, and `filter-branch --prune-empty` only drops commits that become
-empty, not commits that change content and change it back.
-
-Decide the intended behaviour before pinning this one. If a no-op normal push
-should short-circuit the way `--squash` does, the cheap check is a content
-comparison excluding `.gitrepo` before the branch is reconstructed, which would
-also remove the 90-second no-op.
 
 ## Diagnosis
 

@@ -264,6 +264,19 @@ but you can specify a (properly merged) branch to push.
 After that, the C<push> command just checks that the branch contains the
 upstream HEAD and then pushes it upstream.
 
+If the C<subdir> content is already identical to the upstream commit recorded
+in C<< <subdir>/.gitrepo >> (the C<.gitrepo> file itself is never compared,
+since it does not exist upstream), then there is nothing to contribute and
+C<push> reports that it has no new commits. It does not reconstruct the local
+history in that case, and it records the sync point in C<< <subdir>/.gitrepo
+>> so that later C<push> and C<status> commands do not have to consider the
+same range again.
+
+This means local subrepo commits whose net effect on the content is nothing
+new to upstream are not pushed. To send such history upstream deliberately,
+reconstruct it with C<< git subrepo branch <subdir> >> and push that branch
+explicitly with C<< git subrepo push <subdir> subrepo/<subdir> >>.
+
 The C<--force> option will do a force push. Force pushes are typically
 discouraged. Only use this option if you fully understand it. (The C<--force>
 option will NOT check for a proper merge. ANY branch will be force pushed!)
