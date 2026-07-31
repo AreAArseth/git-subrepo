@@ -1,0 +1,28 @@
+#------------------------------------------------------------------------------
+#
+# This is the `git-subrepo` initialization script.
+#
+# This script turns on the `git-subrepo` Git subcommand and its manpages, for
+# the Tcl shell.
+#
+# Just add a line like this to your `~/.tclshrc`:
+#
+#   source /path/to/git-subrepo/.tclshrc
+#
+#------------------------------------------------------------------------------
+
+set GIT_SUBREPO_ROOT [file dirname [file normalize [info script]]]
+set ::env(GIT_SUBREPO_ROOT) $GIT_SUBREPO_ROOT
+
+set path_separator $tcl_platform(pathSeparator)
+if {[info exists ::env(PATH)]} {
+    set ::env(PATH) "$GIT_SUBREPO_ROOT/lib${path_separator}$::env(PATH)"
+} else {
+    set ::env(PATH) "$GIT_SUBREPO_ROOT/lib"
+}
+
+if {[info exists ::env(MANPATH)]} {
+    set ::env(MANPATH) "$GIT_SUBREPO_ROOT/man${path_separator}$::env(MANPATH)"
+} else {
+    set ::env(MANPATH) "$GIT_SUBREPO_ROOT/man"
+}
