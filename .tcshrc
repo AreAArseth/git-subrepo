@@ -1,0 +1,32 @@
+#------------------------------------------------------------------------------
+#
+# This is the `git-subrepo` initialization script.
+#
+# This script turns on the `git-subrepo` Git subcommand and its manpages, for
+# the *Tcsh* shell.
+#
+# Tcsh does not provide the path of a sourced file. Set the repository path
+# before sourcing this file, or pass it as the source command's argument:
+#
+#   setenv GIT_SUBREPO_ROOT /path/to/git-subrepo
+#   source /path/to/git-subrepo/.tcshrc
+#
+#   source /path/to/git-subrepo/.tcshrc /path/to/git-subrepo
+#
+#------------------------------------------------------------------------------
+
+if ($#argv >= 1) then
+    setenv GIT_SUBREPO_ROOT "$argv[1]"
+endif
+
+if (! $?GIT_SUBREPO_ROOT) then
+    echo "Set GIT_SUBREPO_ROOT before sourcing git-subrepo/.tcshrc"
+else
+    set path = ("$GIT_SUBREPO_ROOT/lib" $path)
+
+    if ($?MANPATH) then
+        setenv MANPATH "$GIT_SUBREPO_ROOT/man:$MANPATH"
+    else
+        setenv MANPATH "$GIT_SUBREPO_ROOT/man"
+    endif
+endif
