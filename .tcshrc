@@ -6,7 +6,8 @@
 # the *Tcsh* shell.
 #
 # Tcsh does not provide the path of a sourced file. Set the repository path
-# before sourcing this file, or pass it as the source command's argument:
+# before sourcing this file, pass it as the source command's argument, or
+# install it at `$HOME/git-subrepo`:
 #
 #   setenv GIT_SUBREPO_ROOT /path/to/git-subrepo
 #   source /path/to/git-subrepo/.tcshrc
@@ -17,6 +18,12 @@
 
 if ($#argv >= 1) then
     setenv GIT_SUBREPO_ROOT "$argv[1]"
+else if (! $?GIT_SUBREPO_ROOT) then
+    if ($?HOME) then
+        if (-d "$HOME/git-subrepo") then
+            setenv GIT_SUBREPO_ROOT "$HOME/git-subrepo"
+        endif
+    endif
 endif
 
 if (! $?GIT_SUBREPO_ROOT) then
