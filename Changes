@@ -2,6 +2,7 @@ version: 0.5.0-dev
 - New subrepos use prefixed imported history and complete v2 tracking metadata.
 - Add explicit legacy migration, confirmed history repair, and shared-history log.
 - Preserve legacy behavior with --history=legacy and existing tracking files.
+- Add migrate --all previews and preflight checks; clarify push/pull prerequisites.
 ---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST

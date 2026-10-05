@@ -1011,6 +1011,33 @@ Use 'git subrepo retarget' to change the upstream, or rerun your sync command fo
   fi
 }
 
+history:preview-migration() {
+  local history_dry_run=true
+  command-prepare
+  command_arguments=( "$1" )
+  command:migrate
+}
+
+history:preflight-migrate-all() {
+  local subdir preview blocked=false
+  for subdir in "${subrepos[@]}"; do
+    if preview=$(
+      exec 2>&1
+      trap - EXIT INT TERM
+      history:preview-migration "$subdir"
+    ); then
+      if $history_dry_run; then printf '%s\n' "$preview"; fi
+    else
+      printf "Migration check failed for '%s/':\n%s\n" "$subdir" "$preview" >&2
+      blocked=true
+    fi
+  done
+  if $blocked; then
+    error "Migration checks failed. No subrepos were migrated and no project files were changed.
+Synchronize the blocked subrepos, then rerun 'git subrepo migrate --all --dry-run'."
+  fi
+}
+
 command:migrate() {
   command-setup +subdir
   [[ ${history_option:-prefixed} == prefixed ]] ||
@@ -1025,7 +1052,12 @@ command:migrate() {
     error "The recorded shared history is not available locally.
 Run 'git subrepo fetch $(printf '%q' "$subdir")', then preview migration again."
   git diff --quiet "$subrepo_commit" "HEAD:$subdir" -- . ':(exclude).gitrepo' ||
-    error "'$subdir/' has local shared changes. Synchronize those changes before migrating; no project files were changed."
+    error "'$subdir/' cannot be migrated: its committed shared content differs from its recorded upstream commit.
+This is not an uncommitted working-tree change. The tracking record may be behind changes already upstream.
+Complete a subrepo push/pull synchronization before migrating; fetch alone does not synchronize content or tracking metadata.
+Run 'git subrepo pull $(printf '%q' "$subdir")' to integrate incoming changes, resolve and commit any conflicts,
+then 'git subrepo push $(printf '%q' "$subdir")' to publish remaining shared changes. Pull again if needed to finish synchronization.
+No project files were changed."
   history_mode=prefixed
   history_prefix=$subdir
   history:set-refs

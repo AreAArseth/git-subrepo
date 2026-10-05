@@ -636,6 +636,15 @@ These commands/options do not exist in the inspected checkout. Migration is more
 
 Dry run must leave parent refs, index, working tree, and tracking metadata unchanged. Explicitly document any fetch/cache side effects, or avoid them. Repeating migration to the same format must be a no-op; unsupported format transitions need a dedicated plan. Failure must not leave the branch pointing to an incomplete migration or metadata promising ancestry that was not attached.
 
+Bulk migration uses `git subrepo migrate --all` (`-a`). With `--dry-run`, check
+every subrepo and report every blocker without making changes. Without
+`--dry-run`, run the same preflight checks before migrating any subrepo; a blocked
+subrepo prevents all migrations. Already migrated subrepos are unchanged.
+Integration failures after successful preflight may leave earlier migrations
+completed; retries must safely resume or skip those completed migrations.
+Content differing from the recorded upstream commit requires explicit push/pull
+synchronization, not just fetching objects.
+
 ### Historical visibility and boundaries
 
 The migration attaches history reachable from the recorded original upstream tip. It does not rewrite earlier parent-project integration commits or automatically restore upstream histories lost after force pushes. Old integration entries remain alongside attached individual history; duplicate representations are still an open issue. A repair/recovery procedure is needed for missing objects, old-client history gaps created before migration, or partial/manual conversions.

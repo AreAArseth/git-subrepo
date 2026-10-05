@@ -9,7 +9,7 @@ Git Submodule Alternative
 
   git subrepo clone <remote-url> [<subdir>]
   git subrepo init <subdir>
-  git subrepo migrate <subdir> --history=prefixed [--dry-run]
+  git subrepo migrate <subdir>|--all --history=prefixed [--dry-run]
   git subrepo pull <subdir>
   git subrepo retarget <subdir>
   git subrepo push <subdir>
@@ -110,6 +110,23 @@ Migration requires a clean project and shared content matching the recorded
 upstream commit. It adds one commit, preserves old project commits and content,
 and upgrades the tracking file. The preview does not fetch or modify anything.
 Migration does not silently import a newer upstream tip or push your project.
+
+If committed shared content differs from the recorded upstream commit, finish a
+full subrepo push/pull synchronization first. Pull to integrate incoming changes,
+resolve and commit conflicts, then push remaining shared changes; pull again if
+needed to finish synchronization. Fetch alone only downloads history and does
+not synchronize content or tracking metadata.
+
+Check all subrepos before migrating any:
+
+  git subrepo migrate -a --dry-run
+  git subrepo migrate --all
+
+`--all` (`-a`) reports every blocked subrepo. Actual bulk migration checks all
+subrepos first and changes none if any check fails. Already migrated subrepos
+are left unchanged. Each legacy subrepo gets its own migration commit.
+Failures during integration (such as a rejected commit hook) can still leave
+earlier migrations completed; fix the failure and rerun the command.
 
 Coordinate the transition with collaborators: `[subrepo-v2]` requires a client
 that supports prefixed history. Old clients may report a missing `subrepo.commit`
@@ -270,15 +287,26 @@ the same arguments. Keep reading…
 
   The `init` command accepts the `--branch=` and `--remote=` options.
 
-- `git subrepo migrate <subdir> [--history=prefixed] [--dry-run]`
+- `git subrepo migrate <subdir>|--all [--history=prefixed] [--dry-run]`
 
   Upgrade an existing legacy subrepo without rewriting published project commits.
   First synchronize its shared contents and ensure the project is clean.
   Fetch its recorded upstream history if it is not available locally.
 
+  Committed shared changes or a stale synchronization record require a full
+  subrepo push/pull synchronization before migration, not just a fetch.
+  Pull incoming changes, resolve and commit conflicts, then push remaining
+  shared changes and pull again if needed to finish synchronization.
+
   `--dry-run` explains the change without fetching, creating objects, or modifying
   project files, refs, or tracking metadata. Migration attaches history from the
   recorded upstream commit, not necessarily the remote's latest tip.
+
+  Use `--all` (`-a`) to check or migrate every subrepo. The preview reports every
+  blocked subrepo. Actual bulk migration checks all subrepos before changing any;
+  failed checks prevent all migrations. Already migrated subrepos are unchanged.
+  Integration failures can leave earlier migrations completed; rerun after
+  fixing the failure.
 
   Collaborators need a compatible client after receiving the migration commit.
   Repeating a completed migration is a no-op. Removing already published imported

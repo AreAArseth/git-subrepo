@@ -205,12 +205,18 @@ main() {
     # Run the command on all subrepos
     local args=( "${command_arguments[@]}" )
     get-all-subrepos
+    if [[ $command == migrate ]]; then
+      [[ ${#args[@]} -eq 0 ]] ||
+        usage-error "Use either a subdir or --all for migrate, not both."
+      history:preflight-migrate-all
+    fi
     if [[ $command =~ ^(pull|push|branch|commit|retarget|clean|fetch)$ ]]; then
       for subdir in "${subrepos[@]}"; do
         history:preflight-all "$subdir"
       done
     fi
     for subdir in "${subrepos[@]}"; do
+      if [[ $command == migrate ]] && $history_dry_run; then continue; fi
       if [[ $history_resume_after ]]; then
         [[ $subdir == "$history_resume_after" ]] || continue
         history_resume_after=
@@ -1694,7 +1700,7 @@ options_push='all branch force message remote squash update'
 options_retarget='all branch force remote update'
 options_status='ALL all fetch log log-limit diff'
 options_log='fetch'
-options_migrate='message'
+options_migrate='all message'
 check_option() {
   local var=options_${command//-/_}
   [[ ${!var} =~ $1 ]] ||

@@ -86,7 +86,7 @@ git-subrepo \- Git Submodule Alternative
 \&
 \&    git subrepo clone <remote\-url> [<subdir>]
 \&    git subrepo init <subdir>
-\&    git subrepo migrate <subdir> \-\-history=prefixed [\-\-dry\-run]
+\&    git subrepo migrate <subdir>|\-\-all \-\-history=prefixed [\-\-dry\-run]
 \&    git subrepo pull <subdir>
 \&    git subrepo retarget <subdir>
 \&    git subrepo push <subdir>
@@ -213,6 +213,25 @@ upstream commit. It adds one commit, preserves old project commits and
 content, and upgrades the tracking file. The preview does not fetch or modify
 anything. Migration does not silently import a newer upstream tip or push
 your project.
+.PP
+If committed shared content differs from the recorded upstream commit, finish
+a full subrepo push/pull synchronization first. Pull to integrate incoming
+changes, resolve and commit conflicts, then push remaining shared changes;
+pull again if needed to finish synchronization. Fetch alone only downloads
+history and does not synchronize content or tracking metadata.
+.PP
+Check all subrepos before migrating any:
+.PP
+.Vb 2
+\&    git subrepo migrate \-a \-\-dry\-run
+\&    git subrepo migrate \-\-all
+.Ve
+.PP
+\&\f(CW\*(C`\-\-all\*(C'\fR (\f(CW\*(C`\-a\*(C'\fR) reports every blocked subrepo. Actual bulk migration checks
+all subrepos first and changes none if any check fails. Already migrated
+subrepos are left unchanged. Each legacy subrepo gets its own migration
+commit. Failures during integration (such as a rejected commit hook) can still
+leave earlier migrations completed; fix the failure and rerun the command.
 .PP
 Coordinate the transition with collaborators: \f(CW\*(C`[subrepo\-v2]\*(C'\fR requires a
 client that supports prefixed history. Old clients may report a missing
@@ -373,17 +392,28 @@ The \f(CW\*(C`\-\-method\*(C'\fR option will decide how the join process between
 performed. The default option is merge.
 .Sp
 The \f(CW\*(C`init\*(C'\fR command accepts the \f(CW\*(C`\-\-branch=\*(C'\fR and \f(CW\*(C`\-\-remote=\*(C'\fR options.
-.ie n .IP """git subrepo migrate <subdir> [\-\-history=prefixed] [\-\-dry\-run]""" 4
-.el .IP "\f(CWgit subrepo migrate <subdir> [\-\-history=prefixed] [\-\-dry\-run]\fR" 4
-.IX Item "git subrepo migrate <subdir> [--history=prefixed] [--dry-run]"
+.ie n .IP """git subrepo migrate <subdir>|\-\-all [\-\-history=prefixed] [\-\-dry\-run]""" 4
+.el .IP "\f(CWgit subrepo migrate <subdir>|\-\-all [\-\-history=prefixed] [\-\-dry\-run]\fR" 4
+.IX Item "git subrepo migrate <subdir>|--all [--history=prefixed] [--dry-run]"
 Upgrade an existing legacy subrepo without rewriting published project
 commits. First synchronize its shared contents and ensure the project is
 clean. Fetch its recorded upstream history if it is not available locally.
+.Sp
+Committed shared changes or a stale synchronization record require a full
+subrepo push/pull synchronization before migration, not just a fetch. Pull
+incoming changes, resolve and commit conflicts, then push remaining shared
+changes and pull again if needed to finish synchronization.
 .Sp
 \&\f(CW\*(C`\-\-dry\-run\*(C'\fR explains the change without fetching, creating objects, or
 modifying project files, refs, or tracking metadata. Migration attaches
 history from the recorded upstream commit, not necessarily the remote's
 latest tip.
+.Sp
+Use \f(CW\*(C`\-\-all\*(C'\fR (\f(CW\*(C`\-a\*(C'\fR) to check or migrate every subrepo. The preview reports
+every blocked subrepo. Actual bulk migration checks all subrepos before
+changing any; failed checks prevent all migrations. Already migrated subrepos
+are unchanged. Integration failures can leave earlier migrations completed;
+rerun after fixing the failure.
 .Sp
 Collaborators need a compatible client after receiving the migration commit.
 Repeating a completed migration is a no-op. Removing already published

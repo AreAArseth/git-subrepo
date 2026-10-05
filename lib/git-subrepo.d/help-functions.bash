@@ -13,7 +13,7 @@ fetch                fetch <subdir>|--force --all [-r <remote>] [-b <branch>]
 help                 help [<command>|--all]
 init                 init <subdir> [-r <remote>] [-b <branch>] [--method <merge|rebase>] [--history=prefixed|legacy]
 log                  log <subdir> [--incoming] [--fetch] [--group-equivalent] [--oneline] [-- <git-log-options>]
-migrate              migrate <subdir> [--history=prefixed] [--dry-run]
+migrate              migrate <subdir>|--all [--history=prefixed] [--dry-run]
 pull                 pull <subdir>|--all [-M|-R|-f] [-m <msg>] [--file=<msg file>] [-e] [-b <branch>] [-r <remote>] [-u]
 push                 push <subdir>|--all [<branch>] [-m msg] [--file=<msg file>] [-r <remote>] [-b <branch>] [-M|-R] [-u] [-f] [-s] [-N]
 retarget             retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f]
@@ -232,16 +232,27 @@ help:log() {
 help:migrate() {
     cat <<'...'
 
-  Usage: git subrepo migrate <subdir> [--history=prefixed] [--dry-run]
+  Usage: git subrepo migrate <subdir>|--all [--history=prefixed] [--dry-run]
 
 
   Upgrade an existing legacy subrepo without rewriting published project commits.
   First synchronize its shared contents and ensure the project is clean.
   Fetch its recorded upstream history if it is not available locally.
 
+  Committed shared changes or a stale synchronization record require a full
+  subrepo push/pull synchronization before migration, not just a fetch.
+  Pull incoming changes, resolve and commit conflicts, then push remaining
+  shared changes and pull again if needed to finish synchronization.
+
   `--dry-run` explains the change without fetching, creating objects, or modifying
   project files, refs, or tracking metadata. Migration attaches history from the
   recorded upstream commit, not necessarily the remote's latest tip.
+
+  Use `--all` (`-a`) to check or migrate every subrepo. The preview reports every
+  blocked subrepo. Actual bulk migration checks all subrepos before changing any;
+  failed checks prevent all migrations. Already migrated subrepos are unchanged.
+  Integration failures can leave earlier migrations completed; rerun after
+  fixing the failure.
 
   Collaborators need a compatible client after receiving the migration commit.
   Repeating a completed migration is a no-op. Removing already published imported
