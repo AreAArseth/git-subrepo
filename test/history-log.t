@@ -73,6 +73,22 @@ is "$status" 1 'unsupported grouped formatting fails explicitly'
 like "$(cat "$TMP/options")" 'Remove --group-equivalent' 'formatting refusal gives the supported alternative'
 (cd "$repo" && git subrepo log bar -- --format=%s) > "$TMP/custom"
 like "$(cat "$TMP/custom")" 'Same subject' 'ungrouped custom Git formatting is passed through'
+for quiet in -q --quiet; do
+  status=0
+  (cd "$repo" && git subrepo "$quiet" log bar -- --format=%s) > "$TMP/global" 2>&1 || status=$?
+  is "$status" 0 "log accepts leading $quiet before pass-through Git options"
+  is "$(cat "$TMP/global")" "$(cat "$TMP/custom")" \
+    'leading global options preserve the exact custom log output'
+done
+is "$(cd "$repo" && git subrepo status bar --quiet)" bar \
+  'quiet prefixed status prints the subrepo path'
+(
+  cd "$repo"
+  git subrepo clone "$UPSTREAM/bar" another
+  git subrepo clone "$UPSTREAM/bar" legacy --history=legacy
+) > /dev/null
+is "$(cd "$repo" && git subrepo status --quiet)" "$(printf 'another\nbar\nlegacy')" \
+  'quiet mixed-mode status prints every path once with no labels'
 
 done_testing
 teardown

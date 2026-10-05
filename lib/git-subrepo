@@ -157,6 +157,7 @@ main() {
   local join_method=            # Current join method (rebase/merge)
   local history_mode=legacy history_option='' history_state='' history_mapped=''
   local history_prefix='' history_rewrite='' history_dry_run=false
+  local history_recorded_remote='' history_recorded_branch=''
   local history_accept='' history_incoming=false history_group=false
   local history_oneline=false history_log_args=()
   local history_invocation=("$@")
@@ -1520,19 +1521,6 @@ subrepo:clean() {
 # Parse command line options:
 get-command-options() {
   [[ $# -eq 0 ]] && set -- --help
-  if [[ $1 == log ]]; then
-    local history_parse_args=() arg boundary=false
-    for arg in "$@"; do
-      if $boundary; then
-        history_log_args+=("$arg")
-      elif [[ $arg == -- ]]; then
-        boundary=true
-      else
-        history_parse_args+=("$arg")
-      fi
-    done
-    set -- "${history_parse_args[@]}"
-  fi
 
   [[ ${GIT_SUBREPO_QUIET-} ]] && quiet_wanted=true
   [[ ${GIT_SUBREPO_VERBOSE-} ]] && verbose_wanted=true
@@ -1540,7 +1528,7 @@ get-command-options() {
 
   eval "$(
     echo "$GETOPT_SPEC" |
-      git rev-parse --parseopt -- "$@" ||
+      git rev-parse --parseopt --keep-dashdash -- "$@" ||
     echo exit $?
   )"
 
@@ -1617,13 +1605,23 @@ get-command-options() {
   done
 
   # Set subrepo command:
+  [[ ${1:-} != -- ]] || shift
   command=$1; shift
 
   # Make sure command exists:
   can "command:$command" ||
     usage-error "'$command' is not a command. See 'git subrepo help'."
 
-  command_arguments=("$@")
+  local arg boundary=false
+  for arg in "$@"; do
+    if $boundary && [[ $command == log ]]; then
+      history_log_args+=("$arg")
+    elif ! $boundary && [[ $arg == -- ]]; then
+      boundary=true
+    else
+      command_arguments+=("$arg")
+    fi
+  done
   if [[ $history_option ]]; then
     [[ $command =~ ^(clone|init|migrate)$ ]] ||
       usage-error "--history is only for clone, init, or migrate."
@@ -1733,6 +1731,8 @@ command-prepare() {
   history_mapped=
   history_prefix=
   history_rewrite=
+  history_recorded_remote=
+  history_recorded_branch=
 }
 
 # Do the setup steps needed by most of the subrepo subcommands:
@@ -1740,19 +1740,36 @@ command-setup() {
   get-params "$@"
 
   check-and-normalize-subdir
-  encode-subdir
   gitrepo=$subdir/.gitrepo
   [[ ! -L $gitrepo ]] ||
     error "The tracking file '$gitrepo' must be a regular file, not a symbolic link."
 
+  # Determine the history mode before encoding worktree and ref names.
+  if [[ ! $command =~ ^(clone|init)$ ]]; then
+    read-gitrepo-file
+  elif [[ -f $gitrepo ]]; then
+    if git config --file="$gitrepo" --get-regexp '^subrepo-v2\.' > /dev/null; then
+      read-gitrepo-file
+    fi
+    [[ ! $history_option || $history_option == "$history_mode" ]] ||
+      error "Changing history for '$subdir/' requires 'git subrepo migrate $subdir', not replacement."
+  else
+    history_mode=${history_option:-prefixed}
+    history_state=unpublished
+    history_prefix=$subdir
+    history_rewrite=1
+  fi
+  encode-subdir
+
   if ! $force_wanted; then
-    o "Check for worktree with branch subrepo/$subdir"
-    local _worktree
-    _worktree=$(
-      git worktree list |
-        grep "\[subrepo/$subdir\]" |
-        cut -d ' ' -f1
-    ) || true
+    o "Check for worktree with branch subrepo/$subref"
+    local _worktree='' path='' entry
+    while IFS= read -r entry; do
+      case "$entry" in
+        "worktree "*) path=${entry#worktree } ;;
+        "branch refs/heads/subrepo/$subref") _worktree=$path; break ;;
+      esac
+    done < <(git worktree list --porcelain)
     if [[ $command == commit && -z $_worktree && -z $subrepo_commit_ref ]]; then
       error "There is no worktree available, use the branch command first"
     elif [[ ! $command =~ ^(branch|clean|commit|push|retarget)$ && $_worktree ]]; then
@@ -1776,23 +1793,7 @@ Use the --force flag to override this check or remove the worktree with
   refs_subrepo_fetch=refs/subrepo/$subref/fetch
   refs_subrepo_push=refs/subrepo/$subref/push
 
-  # Read/parse the .gitrepo file (unless clone/init; doesn't exist yet)
-  if [[ ! $command =~ ^(clone|init)$ ]]; then
-    read-gitrepo-file
-  elif [[ -f $gitrepo ]]; then
-    if git config --file="$gitrepo" --get-regexp '^subrepo-v2\.' > /dev/null; then
-      read-gitrepo-file
-    fi
-    [[ ! $history_option || $history_option == "$history_mode" ]] ||
-      error "Changing history for '$subdir/' requires 'git subrepo migrate $subdir', not replacement."
-  else
-    history_mode=${history_option:-prefixed}
-    history_state=unpublished
-    history_prefix=$subdir
-    history_rewrite=1
-  fi
   if [[ $history_mode == prefixed ]]; then
-    history:set-refs
     history:validate-path
     if [[ $command =~ ^(pull|push|branch|commit|retarget)$ ]]; then
       history:ensure-healthy

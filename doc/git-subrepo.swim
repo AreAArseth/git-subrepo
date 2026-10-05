@@ -83,14 +83,17 @@ Start from a parent project with at least one commit:
   git subrepo log shared -- --oneline
 
 To update shared files, use `git subrepo pull shared`. To publish your changes,
-first commit them normally in the parent project, then run `git subrepo push
-shared`. Files outside `shared/` are not published to the shared remote.
+first commit them normally in the parent project, then run:
+
+  git subrepo push shared
+
+Files outside `shared/` are not published to the shared remote.
 
 Default log output labels /local/ and /imported/ commits. They can represent the
-same shared change under different IDs. Use `git subrepo log shared
---group-equivalent` to group only entries whose recorded provenance and actual
-shared changes agree. This does not change Git history. A mixed parent commit
-can also contain unrelated changes; grouping applies only to its shared portion.
+same shared change under different IDs. Use
+`git subrepo log shared --group-equivalent` to group only entries whose recorded
+provenance and actual shared changes agree. This does not change Git history.
+A mixed parent commit can also contain unrelated changes; grouping applies only to its shared portion.
 Old commits without sufficient provenance are not guessed to be equivalent.
 
 For a compact project view use `git log --first-parent`. For imported file
@@ -149,6 +152,10 @@ A conflicting pull leaves an upstream-layout worktree and prints its exact path.
 Edit the conflicted files /there/, stage them, finish the merge or rebase, return
 to your parent project, and run `git subrepo commit shared`. Follow the printed
 commands rather than editing the parent's unchanged copy of the files.
+
+For a retarget conflict, finish the merge or rebase in the same way, but rerun
+the original `git subrepo retarget` command with its remote and branch overrides
+instead of `commit`. The printed retry command preserves those settings.
 
 An ordinary fresh clone retains imported browsing history and provenance. Original
 upstream objects and cache refs are not necessarily present; fetch before

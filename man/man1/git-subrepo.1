@@ -183,8 +183,13 @@ Start from a parent project with at least one commit:
 .Ve
 .PP
 To update shared files, use \f(CW\*(C`git subrepo pull shared\*(C'\fR. To publish your
-changes, first commit them normally in the parent project, then run \f(CW\*(C`gitsubrepo push shared\*(C'\fR. Files outside \f(CW\*(C`shared/\*(C'\fR are not published to the
-shared remote.
+changes, first commit them normally in the parent project, then run:
+.PP
+.Vb 1
+\&    git subrepo push shared
+.Ve
+.PP
+Files outside \f(CW\*(C`shared/\*(C'\fR are not published to the shared remote.
 .PP
 Default log output labels \fIlocal\fR and \fIimported\fR commits. They can represent
 the same shared change under different IDs. Use \f(CW\*(C`git subrepo log shared \-\-group\-equivalent\*(C'\fR to group only entries whose recorded provenance and actual shared
@@ -250,6 +255,11 @@ path. Edit the conflicted files \fIthere\fR, stage them, finish the merge or
 rebase, return to your parent project, and run \f(CW\*(C`git subrepo commit shared\*(C'\fR.
 Follow the printed commands rather than editing the parent's unchanged copy of
 the files.
+.PP
+For a retarget conflict, finish the merge or rebase in the same way, but
+rerun the original \f(CW\*(C`git subrepo retarget\*(C'\fR command with its remote and
+branch overrides instead of \f(CW\*(C`commit\*(C'\fR. The printed retry command preserves
+those settings.
 .PP
 An ordinary fresh clone retains imported browsing history and provenance.
 Original upstream objects and cache refs are not necessarily present; fetch

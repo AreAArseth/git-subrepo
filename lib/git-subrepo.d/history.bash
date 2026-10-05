@@ -6,6 +6,7 @@ history:preflight-all() {
   local subrepo_remote='' subrepo_branch=''
   local subrepo_parent='' subrepo_commit='' subrepo_former='' join_method=''
   local history_mode=legacy history_prefix='' history_state='' history_mapped='' history_rewrite=''
+  local history_recorded_remote='' history_recorded_branch=''
   local output='' OK=true CODE=0 FAIL=true OUT=false SAY=false
   gitrepo=$subdir/.gitrepo
   read-gitrepo-file
@@ -41,6 +42,7 @@ history:lock() {
     return 0
   fi
   local lock=$history_common/subrepo-operation.lock previous lease pid host user index owner=''
+  local previous_tmp=''
   previous=$(git rev-parse --verify refs/subrepo-operation-lock 2>/dev/null) || previous=
   if [[ $previous ]]; then
     pid=$(git config --blob "$previous" lock.pid)
@@ -54,6 +56,12 @@ history:lock() {
 $owner
 Finish that operation before retrying. No project files have been changed."
     fi
+    previous_tmp=$(git config --blob "$previous" lock.nonce) || previous_tmp=
+    [[ ${previous_tmp%/*} == "$history_common" &&
+       ${previous_tmp##*/} =~ ^subrepo-operation\.[a-zA-Z0-9]{8}$ &&
+       ! -L $previous_tmp ]] ||
+      error "The interrupted operation has an invalid temporary-directory record.
+Its files were not removed. Ask the repository maintainer to inspect refs/subrepo-operation-lock before retrying."
   elif [[ -d $lock ]]; then
     [[ ! -f $lock/owner ]] || owner=$(cat "$lock/owner")
     error "Another shared-repository operation is active.
@@ -77,6 +85,9 @@ Finish that operation before retrying. No project files have been changed."
   history_lock=$lock
   HISTORY_CLEANUP_LEASE=$lease
   HISTORY_CLEANUP_LOCK=$history_lock
+  if [[ $previous ]]; then
+    rm -rf -- "$previous_tmp"
+  fi
   if [[ $previous && -d $lock ]]; then
     rm -f "$lock/owner"
     rmdir "$lock"
@@ -145,10 +156,10 @@ Upgrade git-subrepo before changing this shared repository."
   history_state=$(history:field "$gitrepo" state)
   [[ $history_state == tracking || $history_state == unpublished ]] ||
     error "The tracking state in '$gitrepo' is not supported."
-  subrepo_remote=$(history:field "$gitrepo" remote)
-  subrepo_branch=$(history:field "$gitrepo" branch)
-  subrepo_remote=${override_remote:-$subrepo_remote}
-  subrepo_branch=${override_branch:-$subrepo_branch}
+  history_recorded_remote=$(history:field "$gitrepo" remote)
+  history_recorded_branch=$(history:field "$gitrepo" branch)
+  subrepo_remote=${override_remote:-$history_recorded_remote}
+  subrepo_branch=${override_branch:-$history_recorded_branch}
   history:field "$gitrepo" cmdver > /dev/null
   subrepo_parent=$(history:field "$gitrepo" parent)
   join_method=$(history:field "$gitrepo" method)
@@ -244,6 +255,12 @@ No further changes were sent upstream."
 
 history:write() {
   local file=$1 parent=${history_write_parent:-$subrepo_parent}
+  local remote=${history_recorded_remote:-$subrepo_remote}
+  local branch=${history_recorded_branch:-$subrepo_branch}
+  if $update_wanted || [[ $command == retarget ]]; then
+    remote=$subrepo_remote
+    branch=$subrepo_branch
+  fi
   [[ $parent ]] || parent=$original_head_commit
   cat > "$file" <<'EOF'
 ; Managed by git-subrepo. This format requires a prefixed-history capable client.
@@ -254,8 +271,8 @@ EOF
   git config -f "$file" subrepo-v2.rewriteFormat 1
   git config -f "$file" subrepo-v2.prefix "$subdir"
   git config -f "$file" subrepo-v2.state "$history_state"
-  git config -f "$file" subrepo-v2.remote "$subrepo_remote"
-  git config -f "$file" subrepo-v2.branch "$subrepo_branch"
+  git config -f "$file" subrepo-v2.remote "$remote"
+  git config -f "$file" subrepo-v2.branch "$branch"
   git config -f "$file" subrepo-v2.parent "$parent"
   git config -f "$file" subrepo-v2.method "${join_method:-merge}"
   git config -f "$file" subrepo-v2.cmdver "$VERSION"
@@ -956,7 +973,7 @@ Fetch the previously tracked branch before retrying; nothing was pushed."
 }
 
 history:conflict() {
-  local path=$worktree
+  local path=$worktree retry
   [[ $path == /* ]] || path=$start_pwd/$path
   printf "Shared changes need attention in: %s\n" "$path" >&2
   git -C "$path" diff --name-only --diff-filter=U >&2
@@ -966,7 +983,13 @@ history:conflict() {
   else
     printf '  git commit\n' >&2
   fi
-  printf '  cd %q\n  git subrepo commit %q\n' "$start_pwd" "$subdir" >&2
+  printf '  cd %q\n' "$start_pwd" >&2
+  if [[ $command == retarget ]]; then
+    retry=$(history:invocation)
+    printf '  git subrepo %s\n' "${retry% }" >&2
+  else
+    printf '  git subrepo commit %q\n' "$subdir" >&2
+  fi
 }
 
 history:config() {
@@ -1025,7 +1048,7 @@ Run 'git subrepo fetch $(printf '%q' "$subdir")', then preview migration again."
 }
 
 history:status() {
-  if $quiet_wanted; then say "$subdir"; return; fi
+  if $quiet_wanted; then printf '%s\n' "$subdir"; return; fi
   printf "Git subrepo '%s':\n" "$subdir"
   if [[ -f $(git rev-parse --git-path subrepo-integration) ]]; then
     printf '  Interrupted shared update. Follow the retry instructions above.\n'

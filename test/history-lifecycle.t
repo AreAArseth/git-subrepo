@@ -97,11 +97,29 @@ status=0
 (cd "$repo" && git subrepo pull bar) > "$TMP/killed" 2>&1 || status=$?
 is "$status" 137 'SIGKILL leaves an interrupted operation rather than claiming success'
 test-exists "$repo/.git/subrepo-operation.lock/"
+interrupted_lease=$(git -C "$repo" rev-parse refs/subrepo-operation-lock)
+interrupted_tmp=$(git -C "$repo" config --blob "$interrupted_lease" lock.nonce)
+test-exists "$interrupted_tmp/"
 git -C "$repo" config --unset core.hooksPath
 for ((attempt = 0; attempt < 100; attempt++)); do
   [[ -e $repo/.git/index.lock ]] || break
   sleep 0.05
 done
+mkdir "$repo/.git/review-protected"
+echo preserved > "$repo/.git/review-protected/keep"
+git -C "$repo" cat-file blob "$interrupted_lease" > "$TMP/invalid-lease"
+git config -f "$TMP/invalid-lease" lock.nonce "$interrupted_tmp/../review-protected"
+invalid_lease=$(git -C "$repo" hash-object -w "$TMP/invalid-lease")
+git -C "$repo" update-ref refs/subrepo-operation-lock "$invalid_lease" "$interrupted_lease"
+status=0
+(cd "$repo" && git subrepo pull bar) > "$TMP/invalid-nonce" 2>&1 || status=$?
+is "$status" 1 'stale lease recovery refuses a temporary path outside its owned directory'
+like "$(cat "$TMP/invalid-nonce")" 'invalid temporary-directory record' \
+  'unsafe cleanup records produce explicit recovery guidance'
+is "$(cat "$repo/.git/review-protected/keep")" preserved 'recovery does not delete unrelated files'
+is "$(git -C "$repo" rev-parse refs/subrepo-operation-lock)" "$invalid_lease" \
+  'invalid lease refusal preserves the recovery record for inspection'
+git -C "$repo" update-ref refs/subrepo-operation-lock "$interrupted_lease" "$invalid_lease"
 (cd "$repo" && git subrepo pull bar) > "$TMP/reclaimed"
 like "$(cat "$TMP/reclaimed")" 'Recovered an interrupted operation lock' \
   'retry validates and reclaims the dead owner without manual lock deletion'
@@ -109,6 +127,7 @@ is "$(cat "$repo/bar/killed")" survived 'retry completes the journal left by abr
 is "$(git -C "$repo" for-each-ref --format='%(refname)' refs/subrepo-operation-lock)" "" \
   'successful completion releases the atomic operation lease'
 is "$(git -C "$repo" status --porcelain)" "" 'abrupt-termination recovery leaves a clean project'
+test-exists "!$interrupted_tmp/"
 
 echo transport > "$repo/bar/before-transport"
 git -C "$repo" add bar/before-transport

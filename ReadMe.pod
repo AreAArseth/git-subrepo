@@ -121,8 +121,11 @@ Start from a parent project with at least one commit:
     git subrepo log shared -- --oneline
 
 To update shared files, use C<git subrepo pull shared>. To publish your
-changes, first commit them normally in the parent project, then run C<gitsubrepo push shared>. Files outside C<shared/> are not published to the
-shared remote.
+changes, first commit them normally in the parent project, then run:
+
+    git subrepo push shared
+
+Files outside C<shared/> are not published to the shared remote.
 
 Default log output labels I<local> and I<imported> commits. They can represent
 the same shared change under different IDs. Use C<git subrepo log shared --group-equivalent> to group only entries whose recorded provenance and actual shared
@@ -189,6 +192,11 @@ path. Edit the conflicted files I<there>, stage them, finish the merge or
 rebase, return to your parent project, and run C<git subrepo commit shared>.
 Follow the printed commands rather than editing the parent's unchanged copy of
 the files.
+
+For a retarget conflict, finish the merge or rebase in the same way, but
+rerun the original C<git subrepo retarget> command with its remote and
+branch overrides instead of C<commit>. The printed retry command preserves
+those settings.
 
 An ordinary fresh clone retains imported browsing history and provenance.
 Original upstream objects and cache refs are not necessarily present; fetch

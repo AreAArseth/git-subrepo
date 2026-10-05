@@ -96,5 +96,40 @@ is "$(git -C "$OWNER/reclone" rev-parse "refs/subrepo/shared%2a/map-1/$original"
 is "$(git -C "$OWNER/reclone" rev-parse "refs/subrepo/shared%252a/map-1/$original")" "$second" \
   'literal percent-encoded prefix cannot collide with another shared namespace'
 
+repo=$OWNER/reclone
+(cd "$repo" && git subrepo clone "$UPSTREAM/bar" 'legacy%2a' --history=legacy) > /dev/null
+for path in 'shared*' 'shared%2a' 'legacy%2a'; do
+  case "$path" in
+    'shared*') encoded=shared%2a ;;
+    'shared%2a') encoded=shared%252a ;;
+    'legacy%2a') encoded=legacy%2a ;;
+  esac
+  (cd "$repo" && git subrepo branch "$path" -F) > /dev/null
+  before=$(git -C "$repo" rev-parse HEAD)
+  status=0
+  (cd "$repo" && git subrepo pull "$path") > "$TMP/busy" 2>&1 || status=$?
+  is "$status" 1 "pull protects the existing encoded worktree for '$path'"
+  like "$(cat "$TMP/busy")" 'already a worktree' 'the worktree guard explains how to continue'
+  is "$(git -C "$repo" rev-parse HEAD)" "$before" 'worktree refusal preserves the parent commit'
+  worktree=$repo/.git/tmp/subrepo/$encoded
+  printf 'Manual contribution to %s\n' "$path" > "$worktree/manual"
+  git -C "$worktree" add manual
+  git -C "$worktree" commit -qm 'Manual shared contribution'
+  status=0
+  (cd "$repo" && git subrepo commit "$path") > "$TMP/manual" 2>&1 || status=$?
+  is "$status" 0 "plain commit finds the correctly encoded worktree for '$path'"
+  if [[ $status == 0 ]]; then
+    is "$(cat "$repo/$path/manual")" "Manual contribution to $path" \
+      'manual commit integrates the prepared content into the correct subrepo'
+  fi
+  (cd "$repo" && git subrepo clean "$path") > /dev/null
+done
+(
+  cd "$repo"
+  git subrepo -m log clone "$UPSTREAM/bar" -- option-boundary
+) > /dev/null
+is "$(git -C "$repo" log -1 --format=%s)" log \
+  'an option value named log does not change non-log argument parsing'
+
 done_testing
 teardown
