@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        legacy: ["5e0f401", "91edb7044289294b9e47f646217461c47639c346"]
+        legacy: ["5e0f401f877cb54c4462766eec88e3c5f23d39a6", "91edb7044289294b9e47f646217461c47639c346"]
     steps:
       - uses: actions/checkout@v4
         with:

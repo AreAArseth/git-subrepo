@@ -62,9 +62,6 @@ setup_git_config
 # Set the GIT_SUBREPO_ROOT for testing.
 source "$PWD"/.rc
 
-# Get the location of this script
-SCRIPT_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
-
 BASHLIB=$(
   find "$PWD"/ -type d -name bin -o -type d -name lib | tr '\n' ':'
 )
