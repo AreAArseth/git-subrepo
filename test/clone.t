@@ -28,7 +28,7 @@ clone-foo-and-bar
 {
   clone_output=$(
     cd "$OWNER/foo"
-    git subrepo clone "$UPSTREAM/bar"
+    git subrepo clone --history=legacy "$UPSTREAM/bar"
   )
 
   # Check output is correct:

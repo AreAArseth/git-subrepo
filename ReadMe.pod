@@ -16,6 +16,7 @@ git-subrepo - Git Submodule Alternative
 
     git subrepo clone <remote-url> [<subdir>]
     git subrepo init <subdir>
+    git subrepo migrate <subdir> --history=prefixed [--dry-run]
     git subrepo pull <subdir>
     git subrepo retarget <subdir>
     git subrepo push <subdir>
@@ -26,6 +27,7 @@ git-subrepo - Git Submodule Alternative
     git subrepo config <subdir>
 
     git subrepo status [<subdir>]
+    git subrepo log <subdir> [--group-equivalent] [--incoming] [--fetch]
     git subrepo clean <subdir>
 
     git subrepo help [<command> | --all]
@@ -76,19 +78,19 @@ The C<git-subrepo> command benefits these roles in the following ways:
 
 =item * Owners do not deal with the complications of keeping submodules in sync.
 
-=item * Subrepo repositories can contain subrepos themselves.
+=item * Independent shared directories can be synchronized separately.
 
-=item * Branching with subrepos JustWorks™.
+=item * Parent branches and linked worktrees can use shared repositories.
 
 =item * Different branches can have different subrepos in different states, etc.
 
-=item * Moving/renaming/deleting a subrepo subdir JustWorks™.
+=item * Nested subrepos and directory moves remain legacy-only features.
 
 =item * You can C<init> an existing subdirectory into a subrepo.
 
-=item * Your git history is kept squeaky clean.
+=item * New subrepos retain individual imported commits under the shared directory.
 
-=item * Upstream history (clone/pull) is condensed into a single commit.
+=item * C<git log --first-parent> keeps a compact project-level view.
 
 =item * Pulls can use a C<merge>, C<rebase> or C<force> strategies.
 
@@ -100,11 +102,138 @@ The C<git-subrepo> command benefits these roles in the following ways:
 
 =item * No configuration required.
 
-=item * Does not introduce history that messes up other git commands.
+=item * Original upstream commit IDs remain authoritative for synchronization.
 
 =item * Fixes known rebase failures with C<git-subtree>.
 
 =back
+
+=head1 Getting Started with Shared History
+
+New subrepos use I<prefixed history>. Imported commits appear in ordinary Git
+history with paths inside the shared directory. Existing subrepos keep their
+old behavior until you explicitly migrate them.
+
+Start from a parent project with at least one commit:
+
+    git subrepo clone <remote-url> shared
+    git subrepo status shared
+    git subrepo log shared -- --oneline
+
+To update shared files, use C<git subrepo pull shared>. To publish your
+changes, first commit them normally in the parent project, then run C<gitsubrepo push shared>. Files outside C<shared/> are not published to the
+shared remote.
+
+Default log output labels I<local> and I<imported> commits. They can represent
+the same shared change under different IDs. Use C<git subrepo log shared --group-equivalent> to group only entries whose recorded provenance and actual shared
+changes agree. This does not change Git history. A mixed parent commit can
+also contain unrelated changes; grouping applies only to its shared portion.
+Old commits without sufficient provenance are not guessed to be equivalent.
+
+For a compact project view use C<git log --first-parent>. For imported file
+history use C<git log -- shared/>. Git's normal history simplification and
+rename handling still apply to path logs and blame.
+
+=head2 Migrating an Existing Subrepo
+
+    git subrepo fetch shared
+    git subrepo migrate shared --history=prefixed --dry-run
+    git subrepo migrate shared --history=prefixed
+
+Migration requires a clean project and shared content matching the recorded
+upstream commit. It adds one commit, preserves old project commits and
+content, and upgrades the tracking file. The preview does not fetch or modify
+anything. Migration does not silently import a newer upstream tip or push
+your project.
+
+Coordinate the transition with collaborators: C<[subrepo-v2]> requires a
+client that supports prefixed history. Old clients may report a missing
+C<subrepo.commit> field. Upgrade the client; do not add the old field back.
+This is an accidental-use guard, not protection against every old forced
+replacement or manual file edit. The tested upstream 0.4.9 client can return
+success from C<status> even while reporting missing old settings. Do not use
+an old client's exit status as a format-compatibility check.
+
+Use C<--history=legacy> when creating a new subrepo that must keep the old
+format. Recloning an existing subrepo does not silently change its format.
+
+=head2 When History Needs Repair
+
+A squash merge, rebase, or cherry-pick may copy tracking settings without
+their original history links. Before a later pull, push, branch, commit, or
+retarget, git-subrepo checks those links and explains any required repair.
+
+The repair adds a commit, keeps shared content and other project files
+unchanged, updates tracking metadata, and restores imported history. Local
+changes whose original commit boundaries cannot be recovered may be kept as
+one explicitly labelled change. Read the proposal before approving; approval
+defaults to No. After approval the requested command continues, including
+sending changes upstream if you requested a push.
+
+Scripts stop instead of waiting for input. The diagnostic prints a copyable
+command with C<< --accept-repair=<token> >>, authorizing only the exact
+proposed repair. A changed project or request requires a new approval. C<--force> is not approval. Supported repair does not require choosing commit IDs
+or editing C<.gitrepo>. For C<--all>, repair each affected shared directory
+using its individual command first. Each repair needs its own approval; then
+retry the C<--all> operation.
+
+If the upstream itself was force-pushed, required original objects are
+missing, or tracking settings are ambiguous, repair stops rather than
+guessing. Preserve your files and check the remote/history with the repository
+maintainer.
+
+=head2 Conflicts, Offline Use, and Worktrees
+
+A conflicting pull leaves an upstream-layout worktree and prints its exact
+path. Edit the conflicted files I<there>, stage them, finish the merge or
+rebase, return to your parent project, and run C<git subrepo commit shared>.
+Follow the printed commands rather than editing the parent's unchanged copy of
+the files.
+
+An ordinary fresh clone retains imported browsing history and provenance.
+Original upstream objects and cache refs are not necessarily present; fetch
+before synchronizing when requested. Complete upstream ancestry is required
+for rewriting or migration; shallow history is not silently treated as
+complete history.
+
+Operations sharing a parent repository are serialized across its linked
+worktrees. A busy message identifies the owning operation. Finish it before
+retrying rather than deleting its worktree. Unfinished shared-worktree edits
+are preserved. After abrupt termination, retry the same command. The client
+can reclaim its recorded lock after verifying that the same-machine owner
+has exited and Git has released its index lock. It then checks the saved
+update before continuing. If a Git operation is still active, it refuses to
+take over.
+
+If a push succeeds remotely but a local hook or signature fails, the
+diagnostic distinguishes those outcomes. Fix the local failure and retry the
+same push; the pending record lets git-subrepo finish without publishing the
+changes twice. Interrupted local integrations also retain a retry record.
+Retry on the same project branch; differing staged, untracked, ignored, or working-
+file edits are preserved rather than overwritten. Fix the reported hook or
+signing failure before retrying. Retrying an interrupted C<--all> integration
+continues the remaining directories without repeating the integrations already
+completed in that request.
+
+=head2 Tracking and Signatures
+
+The complete C<[subrepo-v2]> section records metadata format 2, rewrite format
+1, the shared path, original upstream ID, imported ID, and synchronization
+state. Newly initialized directories remain I<unpublished> until their first
+push; no upstream ID is invented. Managed history fields cannot be changed
+with C<config --force>.
+
+Rewriting preserves author/committer fields and message bytes but changes
+commit IDs. Original signatures and merge-tag signatures are removed from
+rewritten objects, which are unsigned. Original upstream objects can be
+verified separately when available. Parent integration commits use normal Git
+hooks and configured signing. Newly exported commits may contain source-
+provenance headers; these are not cryptographic proof and do not publish parent-
+only files.
+
+Directory moves, nested prefixed subrepos, and automatic divergent-upstream
+recovery are not supported in this format. Do not change the recorded prefix
+or rewrite format to bypass these restrictions.
 
 =head1 Installation
 
@@ -115,7 +244,7 @@ The best short answer is:
 
 The complete "Installation Instructions" can be found below.
 
-Note: git-subrepo needs a git version (> 2.7) that supports worktree:s.
+Note: git-subrepo requires Git 2.23 or newer and Bash 4.0 or newer.
 
 =head1 Commands
 
@@ -129,7 +258,7 @@ all the same arguments. Keep reading…
 
 =over
 
-=item C<< git subrepo clone <repository> [<subdir>] [-b <branch>] [-f] [-m <msg>] [--file=<msg file>] [-e] [--method <merge|rebase>] >>
+=item C<< git subrepo clone <repository> [<subdir>] [-b <branch>] [-f] [-m <msg>] [--file=<msg file>] [-e] [--method <merge|rebase>] [--history=prefixed|legacy] >>
 
 Add a repository as a subrepo in a subdir of your repository.
 
@@ -137,10 +266,10 @@ This is similar in feel to C<git clone>. You just specify the remote repo url,
 and optionally a sub-directory and/or branch name. The repo will be fetched
 and merged into the subdir.
 
-The subrepo history is I<squashed> into a single commit that contains the
-reference information. This information is also stored in a special file
-called C<< <subdir>/.gitrepo >>. The presence of this file indicates that the
-directory is a subrepo.
+New subrepos default to prefixed history: one project integration commit
+attaches individual imported commits beneath the shared path. Tracking
+information is stored in C<< <subdir>/.gitrepo >>. Use C<--history=legacy> to
+keep the old condensed history and metadata layout.
 
 All subsequent commands refer to the subrepo by the name of the
 I<subdir>. From the subdir, all the current information about the subrepo
@@ -154,7 +283,7 @@ performed. The default option is merge.
 The C<clone> command accepts the C<--branch=> C<--edit>, C<--file>, C<--force>
 and C<--message=> options.
 
-=item C<< git subrepo init <subdir> [-r <remote>] [-b <branch>] [--method <merge|rebase>] >>
+=item C<< git subrepo init <subdir> [-r <remote>] [-b <branch>] [--method <merge|rebase>] [--history=prefixed|legacy] >>
 
 Turn an existing subdirectory into a subrepo.
 
@@ -176,6 +305,41 @@ The C<--method> option will decide how the join process between branches are
 performed. The default option is merge.
 
 The C<init> command accepts the C<--branch=> and C<--remote=> options.
+
+=item C<< git subrepo migrate <subdir> [--history=prefixed] [--dry-run] >>
+
+Upgrade an existing legacy subrepo without rewriting published project
+commits. First synchronize its shared contents and ensure the project is
+clean. Fetch its recorded upstream history if it is not available locally.
+
+C<--dry-run> explains the change without fetching, creating objects, or
+modifying project files, refs, or tracking metadata. Migration attaches
+history from the recorded upstream commit, not necessarily the remote's
+latest tip.
+
+Collaborators need a compatible client after receiving the migration commit.
+Repeating a completed migration is a no-op. Removing already published
+imported history or changing the rewrite format is not supported.
+
+=item C<< git subrepo log <subdir> [--incoming] [--fetch] [--group-equivalent] [--oneline] [-- <git-log-options>] >>
+
+Browse local and imported shared changes without contacting a remote by
+default. Entries distinguish project-local commits from imported copies and
+show usable original upstream IDs. A fresh ordinary clone can browse imported
+history without special subrepo refs.
+
+C<--incoming> shows fetched upstream changes not yet imported. C<--fetch>
+explicitly refreshes them. Divergent upstream history is not presented as a
+linear update.
+
+C<--group-equivalent> groups only proven shared-change equivalents using
+export provenance and actual changes. Missing or unverifiable records stay
+separate. This can group a verified aggregate squash without treating all its
+source commits as individually identical to the squash.
+
+Put custom Git log options after C<-->. Custom formatting is available without
+grouping; grouped output supports the standard display or C<--oneline>. This
+command does not repair or modify project history.
 
 =item C<< git subrepo pull <subdir>|--all [-M|-R|-f] [-m <msg>] [--file=<msg file>] [-e] [-b <branch>] [-r <remote>] [-u] >>
 
@@ -214,9 +378,9 @@ When you pull you can assume a fast-forward strategy (default) or you can
 specify a C<--rebase>, C<--merge> or C<--force> strategy. The latter is the
 same as a C<clone --force> operation, using the current remote and branch.
 
-Like the C<clone> command, C<pull> will squash all the changes (since the last
-pull or clone) into one commit. This keeps your mainline history nice and
-clean. You can easily see the subrepo's history with the C<git log> command:
+In prefixed history, the pull commit attaches the individual incoming commits.
+Legacy subrepos still condense the incoming changes into one project commit.
+The original fetched upstream history remains available with:
 
     git log refs/subrepo/<subdir>/fetch
 
@@ -243,6 +407,13 @@ may still pass C<--update> explicitly. Commit the C<< <subdir>/.gitrepo >>
 change before pulling.
 
 The C<retarget> command accepts the C<--all>, C<--branch=>, C<--remote=>, C<--update> and C<--force> options.
+
+For prefixed history, the new upstream must contain the recorded original
+upstream history. Divergent replacement is refused. Successful retargeting
+synchronizes the shared contents and records the new settings in the project.
+A new branch can be created from the recorded shared history. The command
+publishes shared changes to that branch; it does not push parent-only files.
+Its settings are committed automatically in prefixed mode.
 
 =item C<< git subrepo push <subdir>|--all [<branch>] [-m msg] [--file=<msg file>] [-r <remote>] [-b <branch>] [-M|-R] [-u] [-f] [-s] [-N] >>
 
@@ -277,9 +448,12 @@ new to upstream are not pushed. To send such history upstream deliberately,
 reconstruct it with C<< git subrepo branch <subdir> >> and push that branch
 explicitly with C<< git subrepo push <subdir> subrepo/<subdir> >>.
 
-The C<--force> option will do a force push. Force pushes are typically
-discouraged. Only use this option if you fully understand it. (The C<--force>
-option will NOT check for a proper merge. ANY branch will be force pushed!)
+In legacy mode, the C<--force> option will do a force push. Force pushes are
+typically discouraged. Only use this option if you fully understand it. (The
+C<--force> option will NOT check for a proper merge. ANY branch will be force
+pushed!) Prefixed history refuses force pushes, including under C<--all>. Pull
+and resolve incoming changes first, or use C<retarget> for a supported
+upstream transition.
 
 The C<push> command accepts the C<--all>, C<--branch=>, C<--dry-run>, C<--file>, C<--force>, C<--merge>, C<--message>, C<--rebase>, C<--remote=>, C<--squash> and C<--update> options.
 

@@ -18,7 +18,7 @@ test_round() {
 
   clone_output=$(
     cd "$OWNER/foo"
-    git subrepo clone "$UPSTREAM/bar" -- "$normalize_dir"
+    git subrepo clone --history=legacy "$UPSTREAM/bar" -- "$normalize_dir"
   )
 
   # Check output is correct:

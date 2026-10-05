@@ -18,8 +18,8 @@ cp -r "$UPSTREAM/bar" "$UPSTREAM/zzz"
 
 (
   cd "$OWNER/foo"
-  git subrepo clone "$UPSTREAM/bar" aaa
-  git subrepo clone "$UPSTREAM/zzz" zzz
+  git subrepo clone --history=legacy "$UPSTREAM/bar" aaa
+  git subrepo clone --history=legacy "$UPSTREAM/zzz" zzz
 
   # 'aaa' ends at content parity with pending history, so it takes the sync
   # path. Subrepos are processed in sorted order, so it runs before 'zzz'.

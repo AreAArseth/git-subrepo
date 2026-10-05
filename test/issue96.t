@@ -35,7 +35,7 @@ use Test::More
     # Make sub a subrepo of host
     (
         cd host
-        git subrepo clone ../sub sub
+        git subrepo clone --history=legacy ../sub sub
     ) > /dev/null
 
     # Commit some changes to the host repo

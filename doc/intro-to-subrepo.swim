@@ -1,5 +1,10 @@
 = Introducing Git Subrepos
 
+This historical introduction describes the legacy condensed-history design.
+Use `--history=legacy` to reproduce its history examples. New subrepos now use
+prefixed imported history; see the main git-subrepo manual for current defaults,
+migration, history repair, and supported worktree workflows.
+
 There is a new git command called `subrepo` that is meant to be a solid
 alternative to the `submodule` and `subtree` commands. All 3 of these commands
 allow you to include external repositories (pinned to specific commits) in

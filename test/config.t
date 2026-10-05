@@ -13,7 +13,7 @@ gitrepo=$OWNER/init/doc/.gitrepo
 
 (
   cd "$OWNER/init"
-  git subrepo init doc
+  git subrepo init --history=legacy doc
 ) > /dev/null
 
 # Test init/doc/.gitrepo file contents:

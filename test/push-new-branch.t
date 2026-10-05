@@ -14,7 +14,7 @@ clone-foo-and-bar
   cd "$OWNER/foo"
 
   # Clone the subrepo into a subdir
-  git subrepo clone "$UPSTREAM/bar"
+  git subrepo clone --history=legacy "$UPSTREAM/bar"
 
   # Make a commit:
   add-new-files bar/FooBar

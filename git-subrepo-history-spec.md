@@ -2,9 +2,61 @@
 
 Draft specification · 4 October 2026
 
+## Selected implementation contract
+
+This fork selects **Option 3**. The comparisons and experiment reports below
+describe the pre-implementation baseline; preserve them as evidence, not as
+instructions to use the prototype commit-construction paths.
+
+New subrepos default to prefixed history. Existing subrepos remain legacy until
+`git subrepo migrate <path>`; new repositories can opt out with
+`--history=legacy`. Migration moves all managed fields to `[subrepo-v2]`, with
+metadata `format = 2` and `rewriteFormat = 1`. There is no parallel `[subrepo]`
+section. The original upstream commit remains the synchronization identity;
+`mappedCommit` identifies its prefixed browsing counterpart.
+
+Imports use normal Git commits, including hooks and configured signing, with
+the previous project HEAD first and the mapped upstream tip second. Rewriting
+preserves raw message bytes and identities, removes invalidated signatures, and
+uses versioned commit headers for provenance. Exports use original-layout history,
+not browsing ancestry. Ordinary clones retain imported history without cache refs.
+
+History repair is detected automatically but never silently approved. Each repair
+requires confirmation or a proposal-bound `--accept-repair` token. It preserves
+non-metadata content; irrecoverable local commit boundaries may be consolidated
+into an explicitly identified contribution. `--all` requires separate repairs
+first. Messages must explain the cause, retained state, and next safe action
+without requiring users to choose hashes or edit tracking files.
+
+`git subrepo log` combines local and imported changes offline. Optional
+`--group-equivalent` uses provenance plus exact shared-delta checks; subjects
+alone never prove equivalence. Incoming history uses explicitly fetched original
+objects. Linked parent worktrees serialize operations, with ownership checks and
+journaled recovery after interruption or remote-success/local-failure.
+
+Initial scope excludes unborn parent repositories, nested prefixed subrepos,
+directory moves, force pushes, and automatic divergent-upstream recovery.
+Initialize the parent with a normal commit before importing. Use `retarget` for
+supported upstream transitions.
+
+The old-client section is an accidental-use guard, not universal compatibility
+enforcement. Dedicated tests exercise upstream `5e0f401` and fork baseline
+`91edb7044289294b9e47f646217461c47639c346`. In particular, upstream legacy
+`status` can return success while reporting missing old metadata.
+
+The public-CLI E2E in `test/history-e2e.t` uses real bare remotes, independent
+parents, three alternating synchronization cycles, and an ordinary fresh clone.
+Focused `test/history-*.t` suites cover migration, original-layout export,
+repair, grouping, raw-byte/golden-object identity, hooks/signing, interruption,
+worktree ownership, native SHA-256, file modes, symlinks, gitlinks, and installed
+execution. Run `make test`; pinned-client checks use `make test-history-compat`.
+The Bash/Git platform matrix is a separate `make CI_TEST` gate requiring Docker.
+Local and platform validation are separate gates: run the configured oldest and
+newest supported versions before claiming cross-version compatibility.
+
 ## Goal and scope
 
-Developers in independent parent repositories should easily see individual changes imported through a shared subrepo. Identifying the originating parent project is not required. This spec compares three approaches, from improving the existing pull message to making imported commits part of the parent repository's reachable history. These are proposals, not implemented features.
+Developers in independent parent repositories should easily see individual changes imported through a shared subrepo. Identifying the originating parent project is not required. This spec compares three approaches, from improving the existing pull message to making imported commits part of the parent repository's reachable history. These historical proposals are superseded by the selected implementation contract above.
 
 Upstream reviewed: https://github.com/ingydotnet/git-subrepo, commit `5e0f401`, reporting version 0.4.9.
 

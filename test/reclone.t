@@ -10,7 +10,7 @@ clone-foo-and-bar
 
 (
   cd "$OWNER/foo"
-  git subrepo --quiet clone "$UPSTREAM/bar"
+  git subrepo --quiet clone "$UPSTREAM/bar" --history=legacy
 )
 
 test-exists \

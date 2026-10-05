@@ -14,7 +14,7 @@ clone-foo-and-bar
 {
   is "$(
       cd "$OWNER/bar"
-      git subrepo --quiet clone "$UPSTREAM/foo"
+      git subrepo --quiet clone "$UPSTREAM/foo" --history=legacy
       add-new-files foo/file
       git subrepo --quiet branch foo
       catch git subrepo branch foo

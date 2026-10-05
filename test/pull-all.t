@@ -10,8 +10,8 @@ clone-foo-and-bar
 
 (
   cd "$OWNER/foo"
-  git subrepo clone ../bar bar1
-  git subrepo clone ../bar bar2
+  git subrepo clone --history=legacy ../bar bar1
+  git subrepo clone --history=legacy ../bar bar2
 ) &> /dev/null || die
 
 (

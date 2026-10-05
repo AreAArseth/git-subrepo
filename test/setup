@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 
-# Set this locally for Windows:
-git config core.autocrlf input
-
 set -e
 
 # Isolate git configuration for tests to ensure consistent behavior
@@ -79,8 +76,8 @@ source bash+ :std
 
 source 'lib/git-subrepo'
 
-export TMP=$SCRIPT_DIR/tmp
-rm -fr "$TMP"
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/git-subrepo-tests.XXXXXX")
+export TMP
 
 #export GIT_EXEC_PATH=$PWD/lib:$(git --exec-path)
 export UPSTREAM=$TMP/upstream
@@ -130,7 +127,7 @@ clone-foo-and-bar() {
 subrepo-clone-bar-into-foo() {
   (
     cd "$OWNER/foo"
-    git subrepo clone "$UPSTREAM/bar"
+    git subrepo clone "$UPSTREAM/bar" --history=legacy
   ) &> /dev/null || die
 }
 

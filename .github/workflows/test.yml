@@ -7,6 +7,25 @@ on:
     branches: ["*"]
 
 jobs:
+  history-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        legacy: ["5e0f401", "91edb7044289294b9e47f646217461c47639c346"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: current
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.legacy }}
+          path: legacy
+          persist-credentials: false
+      - name: Exercise the pinned old client against migrated repositories
+        working-directory: current
+        run: make test-history-compat legacy_root="$GITHUB_WORKSPACE/legacy"
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:

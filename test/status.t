@@ -10,11 +10,11 @@ clone-foo-and-bar
 
 (
   cd "$OWNER"/foo
-  git subrepo clone "$UPSTREAM"/bar
-  git subrepo clone "$UPSTREAM"/foo bar/foo
+  git subrepo clone --history=legacy "$UPSTREAM"/bar
+  git subrepo clone --history=legacy "$UPSTREAM"/foo bar/foo
   mkdir lib
-  git subrepo clone "$UPSTREAM"/bar lib/bar
-  git subrepo clone "$UPSTREAM"/foo lib/bar/foo
+  git subrepo clone --history=legacy "$UPSTREAM"/bar lib/bar
+  git subrepo clone --history=legacy "$UPSTREAM"/foo lib/bar/foo
 ) &> /dev/null || die
 
 {
@@ -155,7 +155,7 @@ clone-foo-and-bar
 {
   (
     cd "$OWNER/bar"
-    git subrepo clone "$UPSTREAM/foo"
+    git subrepo clone --history=legacy "$UPSTREAM/foo"
     add-new-files foo/tmpfile
     remove-files foo/tmpfile
   ) &> /dev/null || die
