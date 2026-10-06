@@ -328,7 +328,7 @@ command:retarget() {
     return
   fi
   subrepo:retarget
-  if [[ $history_mode == prefixed && $CODE == -2 ]]; then
+  if [[ $history_mode == prefixed && $CODE == -2 ]] && ! OK; then
     say "'$subdir/' is already tracking this branch; no changes made."
     return
   fi
@@ -2170,6 +2170,14 @@ assert-working-copy-is-clean() {
     local pwd
     pwd=$(pwd)
     o "Assert that working copy is clean: $pwd"
+    if $history_dry_run; then
+      # Compare contents despite stale stat data, without refreshing the index.
+      git -c diff.autoRefreshIndex=false diff --quiet --ignore-submodules ||
+        error "Can't $command subrepo. Unstaged changes. ($pwd)"
+      git diff-index --quiet --cached --ignore-submodules HEAD ||
+        error "Can't $command subrepo. Index has changes. ($pwd)"
+      return
+    fi
     git update-index -q --ignore-submodules --refresh
     git diff-files --quiet --ignore-submodules ||
       error "Can't $command subrepo. Unstaged changes. ($pwd)"
