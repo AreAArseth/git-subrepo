@@ -1073,8 +1073,9 @@ history:invocation() {
 }
 
 history:push() {
-  ! $force_wanted ||
+  if [[ $command == push ]] && $force_wanted; then
     error "Force-pushing is not supported for prefixed shared history. Pull and resolve incoming changes before pushing; no changes were sent."
+  fi
   local pending=$history_common/subrepo-pending/$subref/push
   local candidate remote_tip snapshot expected publish=true previous_tip prepared
   snapshot=$(history:tree HEAD)
