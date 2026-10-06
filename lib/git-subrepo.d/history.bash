@@ -365,6 +365,9 @@ Nested shared repositories are not supported in prefixed history. No project fil
 $(cat "$owner")
 Finish or clean the shared operation there before retrying. Its files were not changed."
   fi
+  if $force_wanted && [[ $command =~ ^(clone|pull)$ ]]; then
+    history:assert-worktree-clean
+  fi
   if [[ $command =~ ^(clone|init|pull|push|commit|migrate|retarget)$ ]] &&
      [[ -n $(git ls-files --others -- ":(literal)$subdir") ]]; then
     error "'$subdir/' contains untracked or ignored files. Preserve or commit them before synchronizing; no project files were changed."
@@ -977,17 +980,27 @@ history:branch() {
   git:make-ref "$refs_subrepo_branch" "$branch"
 }
 
+history:assert-worktree-clean() {
+  local path=$history_common/tmp/subrepo/$subref changes
+  [[ -d $path ]] || return 0
+  changes=$(git --no-optional-locks -C "$path" status --porcelain) ||
+    error "Unable to inspect the shared worktree '$path'. Its files were not changed."
+  if [[ -n $changes ||
+        -n $(git -C "$path" ls-files --others) ||
+        -f $(git -C "$path" rev-parse --git-path MERGE_HEAD) ||
+        -d $(git -C "$path" rev-parse --git-path rebase-merge) ||
+        -d $(git -C "$path" rev-parse --git-path rebase-apply) ]]; then
+    error "The shared worktree '$path' contains unfinished changes.
+Preserve or commit them there before cleanup. No worktree was deleted."
+  fi
+}
+
 history:remove-worktree() {
-  local branch=subrepo/$subref path
-  path=$history_common/tmp/$branch
+  local path=$history_common/tmp/subrepo/$subref
+  history:assert-worktree-clean
   if [[ ! -d $path ]]; then
     rm -f "$history_common/subrepo-owners/$subref"
     return 0
-  fi
-  if [[ -n $(git -C "$path" status --porcelain) ||
-        -n $(git -C "$path" ls-files --others) ]]; then
-    error "The shared worktree '$path' contains unfinished changes.
-Preserve or commit them there before cleanup. No worktree was deleted."
   fi
   git worktree remove "$path"
   rm -f "$history_common/subrepo-owners/$subref"

@@ -2190,7 +2190,9 @@ assert-working-copy-is-clean() {
     local pwd
     pwd=$(pwd)
     o "Assert that working copy is clean: $pwd"
-    if $history_dry_run; then
+    # Forced replacements can still be refused by shared-worktree preflight.
+    # Inspect without refreshing the parent index before that decision.
+    if $history_dry_run || { $force_wanted && [[ $command =~ ^(clone|pull)$ ]]; }; then
       git diff-index --quiet --cached --ignore-submodules HEAD ||
         error "Can't $command subrepo. Index has changes. ($pwd)"
       # Status refreshes stale stat data in memory; optional locks control

@@ -24,6 +24,8 @@ version: 0.5.0-dev
 - Keep existing shared-worktree indexes unchanged during retarget previews.
 - Preserve edited integration messages when retrying hook or signing failures.
 - Allow retarget --force and its exact retries without enabling force pushes.
+- Preflight shared worktrees before forced replacement; scope nested workflows
+  explicitly to legacy history.
 ---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST

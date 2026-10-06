@@ -906,7 +906,13 @@ If you want to chat about the `git-subrepo` command, join `#gitcommands` on
 
 = Working with nested subrepos
 
-`git-subrepo` supports adding subrepos which themselves make use of
+This workflow applies only to *legacy history*. Explicitly select
+`--history=legacy` when cloning or initializing subrepos for this workflow.
+Prefixed history is the default and rejects nested tracking metadata, including
+metadata in earlier upstream commits. These nested repositories cannot currently
+be migrated to prefixed history.
+
+Legacy history supports adding subrepos which themselves make use of
 subrepos. In fact, subrepo itself is built this way. Take a look in the
 `ext/` folder, it houses 2 dependencies as subrepos, `test-more-bash` and
 `bashplus`.
@@ -923,11 +929,11 @@ The structure is therefore as follows:
       |- test-tap-bash
 
 However, it's important to understand how this works. Here's the key idea:
-There is *no* special handling for nested subrepos.
+There is *no* special handling for nested subrepos in legacy mode.
 
-When you clone a subrepo, *all* `git-subrepo` does is download the code
+When you clone a subrepo with `--history=legacy`, *all* `git-subrepo` does is download the code
 and set up the subrepo file.
-This means that all the subrepo commands simply act on the subrepo as a whole,
+The legacy subrepo commands simply act on the subrepo as a whole,
 treating nested subrepos like any other part of the source code.
 
 Let's look at what this means in practice. Say you have a structure as follows:
