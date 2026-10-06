@@ -462,7 +462,7 @@ The set of commands used above are described in detail below.
 The C<pull> command accepts the C<--all>, C<--branch=>, C<--edit>, C<--file>,
 C<--force>, C<--message=>, C<--remote=> and C<--update> options.
 
-=item C<< git subrepo retarget <subdir> [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run] >>
+=item C<< git subrepo retarget (<subdir> [-b <branch>]|--all) [-r <remote>] [-u] [-f] [--dry-run] >>
 
 Move a shared folder to a different upstream branch or remote. This command
 can merge shared files, create commits in this project, and publish committed

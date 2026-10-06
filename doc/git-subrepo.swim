@@ -419,7 +419,7 @@ the same arguments. Keep reading…
   The `pull` command accepts the `--all`, `--branch=`, `--edit`, `--file`,
   `--force`, `--message=`, `--remote=` and `--update` options.
 
-- `git subrepo retarget <subdir> [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run]`
+- `git subrepo retarget (<subdir> [-b <branch>]|--all) [-r <remote>] [-u] [-f] [--dry-run]`
 
   Move a shared folder to a different upstream branch or remote. This command
   can merge shared files, create commits in this project, and publish committed

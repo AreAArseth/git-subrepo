@@ -16,7 +16,7 @@ log                  log <subdir> [--incoming] [--fetch] [--group-equivalent] [-
 migrate              migrate <subdir>|--all [--history=prefixed] [--dry-run]
 pull                 pull <subdir>|--all [-M|-R|-f] [-m <msg>] [--file=<msg file>] [-e] [-b <branch>] [-r <remote>] [-u]
 push                 push <subdir>|--all [<branch>] [-m msg] [--file=<msg file>] [-r <remote>] [-b <branch>] [-M|-R] [-u] [-f] [-s]
-retarget             retarget <subdir> [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run]
+retarget             retarget (<subdir> [-b <branch>]|--all) [-r <remote>] [-u] [-f] [--dry-run]
 status               status [<subdir>|--all|--ALL] [-F] [-q|-v]
 upgrade              upgrade
 version              version [-q|-v]
@@ -396,7 +396,7 @@ help:push() {
 help:retarget() {
     cat <<'...'
 
-  Usage: git subrepo retarget <subdir> [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run]
+  Usage: git subrepo retarget (<subdir> [-b <branch>]|--all) [-r <remote>] [-u] [-f] [--dry-run]
 
 
   Move a shared folder to a different upstream branch or remote. This command
