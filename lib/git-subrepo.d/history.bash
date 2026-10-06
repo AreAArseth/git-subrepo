@@ -308,26 +308,24 @@ history:tree() {
   rm -f "$index"
 }
 
-history:nest-tree() {
-  set -e
-  local tree=$1 prefix=$subdir name
-  while [[ $prefix ]]; do
-    name=${prefix##*/}
-    tree=$(printf '040000 tree %s\t%s\0' "$tree" "$name" | git mktree -z)
-    if [[ $prefix == */* ]]; then prefix=${prefix%/*}; else prefix=; fi
-  done
-  printf '%s\n' "$tree"
-}
-
 # Messages never enter shell variables: only headers are parsed and rewritten.
 history:object() {
   set -e
   local original=$1 tree=$2 provenance=$3
   shift 3
-  local raw target line skip=false offset=0 parent
+  local raw target
   raw=$(mktemp "$history_tmp/raw.XXXXXXXX")
   target=$(mktemp "$history_tmp/commit.XXXXXXXX")
   git cat-file commit "$original" > "$raw"
+  history:write-object "$raw" "$target" "$tree" "$provenance" "$@"
+  rm -f "$raw" "$target"
+}
+
+history:write-object() {
+  set -e
+  local raw=$1 target=$2 tree=$3 provenance=$4
+  shift 4
+  local line skip=false offset=0 parent
   printf 'tree %s\n' "$tree" > "$target"
   for parent in "$@"; do printf 'parent %s\n' "$parent" >> "$target"; done
   local LC_ALL=C
@@ -339,6 +337,9 @@ history:object() {
       continue
     fi
     skip=false
+    if [[ $provenance == git-subrepo-rewrite\ * && $line == git-subrepo-rewrite\ * ]]; then
+      error "The upstream contains browsing-only rewritten commits. Use its original shared-history branch."
+    fi
     case "$line" in
       tree\ *|parent\ *|gpgsig\ *|gpgsig-sha256\ *|mergetag\ *|git-subrepo-rewrite\ *)
         skip=true ;;
@@ -349,15 +350,19 @@ history:object() {
   printf '\n' >> "$target"
   tail -c "+$((offset + 1))" "$raw" >> "$target"
   git hash-object -t commit -w "$target"
-  rm -f "$raw" "$target"
 }
 
 history:rewrite() {
   set -e
   local tip=$1 encoded base original mapped tree parent existing originals incremental=false
+  local source_tree source_parents paths path records batch_oid batch_type size
+  local prefix=$subdir name
+  local tree_ids=()
+  local raw=$history_tmp/rewrite-raw target=$history_tmp/rewrite-commit
+  local updates=$history_tmp/rewrite-refs batch=$history_tmp/rewrite-batch
   encoded=$(history:path-code "$subdir")
   base=refs/subrepo/$subref/map-1
-  declare -A mapping=()
+  declare -A mapping=() cached=() trees=() processed=()
   if [[ $(git rev-parse --is-shallow-repository) == true ]]; then
     error "Complete upstream history is needed for '$subdir/'.
 Fetch the missing history before importing. No project files were changed."
@@ -366,12 +371,24 @@ Fetch the missing history before importing. No project files were changed."
         -s $history_common/info/grafts ]]; then
     error "History replacements are active. Disable them before rewriting shared history."
   fi
+  # Let Git walk tree changes once, rather than listing every complete snapshot.
+  paths=$history_tmp/rewrite-paths
+  git log --no-show-signature --format= --name-only -z --no-renames --diff-filter=A \
+    --full-history --root -m "$tip" -- ':(glob)**/.gitrepo' > "$paths"
+  while IFS= read -r -d '' path; do
+    if [[ $path == .gitrepo || $path == */.gitrepo ]]; then
+      error "The incoming repository contains nested subrepo metadata. Nested prefixed imports are not supported."
+    fi
+  done < "$paths"
+  records=$(git for-each-ref --format='%(refname) %(objectname)' "$base/")
+  while read -r original mapped; do
+    [[ $original ]] || continue
+    cached[${original#"$base/"}]=$mapped
+  done <<< "$records"
   if [[ $subrepo_commit && $history_mapped ]] &&
-     [[ $(git rev-parse --verify "$base/$subrepo_commit" 2>/dev/null) == "$history_mapped" ]] &&
+     [[ ${cached[$subrepo_commit]-} == "$history_mapped" ]] &&
      git merge-base --is-ancestor "$subrepo_commit" "$tip"; then
-    while read -r original mapped; do
-      mapping[${original#"$base/"}]=$mapped
-    done < <(git for-each-ref --format='%(refname) %(objectname)' "$base/")
+    for original in "${!cached[@]}"; do mapping[$original]=${cached[$original]}; done
     incremental=true
     originals=$(git rev-list "$subrepo_commit")
     while IFS= read -r original; do
@@ -389,42 +406,66 @@ Fetch the missing history before importing. No project files were changed."
     done < <(git rev-list "$history_mapped")
   fi
   if $incremental; then
-    originals=$(git rev-list --reverse --topo-order --boundary "$tip" "^$subrepo_commit")
-    originals="$subrepo_commit"$'\n'"$originals"
+    originals=$(git log --no-show-signature --format='%H %T %P' --reverse --topo-order --boundary "$tip" "^$subrepo_commit")
+    originals="$(git log --no-show-signature -1 --format='%H %T %P' "$subrepo_commit")"$'\n'"$originals"
   else
-    originals=$(git rev-list --reverse --topo-order "$tip")
+    originals=$(git log --no-show-signature --format='%H %T %P' --reverse --topo-order "$tip")
   fi
-  while IFS= read -r original; do
+  while read -r original source_tree source_parents; do
+    [[ $original && ! ${trees[$source_tree]-} ]] || continue
+    tree_ids+=("$source_tree")
+    trees[$source_tree]=$source_tree
+  done <<< "$originals"
+  # Each prefix component needs one batch, regardless of the commit count.
+  while [[ $prefix ]]; do
+    name=${prefix##*/}
+    for source_tree in "${tree_ids[@]}"; do
+      printf '040000 tree %s\t%s\0\0' "${trees[$source_tree]}" "$name"
+    done > "$history_tmp/rewrite-trees"
+    git mktree -z --batch < "$history_tmp/rewrite-trees" > "$history_tmp/rewrite-tree-ids"
+    for source_tree in "${tree_ids[@]}"; do
+      read -r tree
+      trees[$source_tree]=$tree
+    done < "$history_tmp/rewrite-tree-ids"
+    if [[ $prefix == */* ]]; then prefix=${prefix%/*}; else prefix=; fi
+  done
+  # A regular file lets head consume exact byte counts without buffering the next object.
+  while read -r original source_tree source_parents; do
+    [[ ! $original ]] || printf '%s\n' "$original"
+  done <<< "$originals" | git cat-file --batch > "$batch"
+  : > "$updates"
+  while read -r original source_tree source_parents; do
     [[ $original ]] || continue
-    original=${original#-}
+    read -r batch_oid batch_type size <&3
+    [[ $batch_oid == "$original" && $batch_type == commit && $size =~ ^[0-9]+$ ]] ||
+      error "The original shared commit $original could not be read. Fetch its history before retrying."
+    head -c "$size" <&3 > "$raw"
+    read -r existing <&3
+    [[ ! ${processed[$original]-} ]] || continue
+    processed[$original]=true
     local parents=()
-    for parent in $(git show -s --format=%P "$original"); do
+    for parent in $source_parents; do
       [[ ${mapping[$parent]-} ]] ||
         error "Upstream history is incomplete at $parent. Fetch its parents before retrying."
       parents+=("${mapping[$parent]}")
     done
-    mapped=${mapping[$original]-}
-    if [[ ! $mapped ]]; then
-      mapped=$(git rev-parse --verify "$base/$original" 2>/dev/null) || mapped=
-    fi
-    tree=$(history:nest-tree "$(git rev-parse "$original^{tree}")")
+    mapped=${mapping[$original]-${cached[$original]-}}
+    tree=${trees[$source_tree]}
     if [[ $mapped ]]; then
       [[ $(history:header "$mapped" git-subrepo-rewrite) == "1 $original $encoded" &&
          $(git rev-parse "$mapped^{tree}") == "$tree" &&
          $(git show -s --format=%P "$mapped") == "${parents[*]}" ]] ||
         error "The saved history mapping for '$subdir/' is inconsistent. No project files were changed."
     else
-      if git ls-tree -r --name-only "$original" | grep -E '(^|/)\.gitrepo$' > /dev/null; then
-        error "The incoming repository contains nested subrepo metadata. Nested prefixed imports are not supported."
-      fi
-      [[ ! $(history:header "$original" git-subrepo-rewrite) ]] ||
-        error "The upstream contains browsing-only rewritten commits. Use its original shared-history branch."
-      mapped=$(history:object "$original" "$tree" \
+      mapped=$(history:write-object "$raw" "$target" "$tree" \
         "git-subrepo-rewrite 1 $original $encoded" "${parents[@]}")
     fi
-    git update-ref "$base/$original" "$mapped"
+    if [[ ${cached[$original]-} != "$mapped" ]]; then
+      printf 'update %s/%s %s\n' "$base" "$original" "$mapped" >> "$updates"
+    fi
     mapping[$original]=$mapped
-  done <<< "$originals"
+  done 3< "$batch" <<< "$originals"
+  git update-ref --stdin < "$updates"
   printf '%s\n' "${mapping[$tip]}"
 }
 

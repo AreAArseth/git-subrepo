@@ -6,7 +6,11 @@ use Test::More
 clone-foo-and-bar
 
 tree=$(git -C "$OWNER/bar" rev-parse 'HEAD^{tree}')
-printf 'Raw message \351\n\nwithout final newline' > "$TMP/body"
+{
+  printf 'Raw message \351\n\n'
+  printf '%65536s' '' | tr ' ' x
+  printf '\nwithout final newline'
+} > "$TMP/body"
 {
   printf 'tree %s\n' "$tree"
   printf 'author Exact Author <author@example.invalid> 1234567890 +0530\n'
@@ -30,7 +34,7 @@ git -C "$OWNER/foo" cat-file commit "$mapped" > "$TMP/mapped"
 tail -c "$(wc -c < "$TMP/body" | tr -d ' ')" "$TMP/mapped" > "$TMP/mapped-body"
 status=0
 cmp "$TMP/body" "$TMP/mapped-body" || status=$?
-is "$status" 0 'rewrite preserves non-UTF8 message bytes and missing final newline'
+is "$status" 0 'rewrite preserves a large non-UTF8 message and missing final newline'
 is "$(grep '^author ' "$TMP/mapped")" "$(grep '^author ' "$TMP/original")" \
   'rewrite preserves exact author identity and timezone'
 is "$(grep '^committer ' "$TMP/mapped")" "$(grep '^committer ' "$TMP/original")" \
