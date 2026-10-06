@@ -186,6 +186,8 @@ main() {
 
   # Make sure repo is in the proper state:
   assert-repo-is-ready
+  # Recovery can create a commit, so initialize its hook environment first.
+  command-init
   history:lock
   history:resume-integration
   if $history_finished_request; then
@@ -194,8 +196,6 @@ main() {
     return 0
   fi
   assert-working-copy-is-clean
-
-  command-init
 
   if $all_wanted && [[ ! $command =~ ^(help|status)$ ]]; then
     if [[ -n $subrepo_branch ]]; then

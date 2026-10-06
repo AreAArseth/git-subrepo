@@ -14,6 +14,8 @@ version: 0.5.0-dev
 - Validate migration eligibility during previews and serialize readers with writers.
 - Reject invalid join methods and mismatched prefixed reclone sources; persist
   push --update settings without publishing unchanged shared content.
+- Preserve hook environment markers when retrying interrupted integrations;
+  keep detailed status projections out of the repository object database.
 ---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST

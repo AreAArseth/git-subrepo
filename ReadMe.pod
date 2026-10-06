@@ -223,17 +223,19 @@ complete history.
 
 Operations sharing a parent repository are serialized across its linked
 worktrees. Offline status, history browsing, and previews participate too. Read-
-only commands use temporary coordination files, without changing Git objects,
-refs, or indexes. A busy message refuses the competing operation. Finish the
-active operation before retrying rather than deleting its worktree. Unfinished
-shared-worktree edits are preserved. After abrupt termination, retry the same
-command. The client can reclaim its recorded lock after verifying that the same-
-machine owner has exited and Git has released its index lock. It then checks
-the saved update before continuing. If a Git operation is still active, it
-refuses to take over. An incomplete or unverifiable process lock is preserved
-for maintainer inspection. This coordination does not prevent unrelated Git
-commands or older clients from changing the repository; do not run those
-concurrently with shared operations.
+only commands use temporary coordination files, without changing repository
+objects, refs, or indexes. Detailed status computes local history in a
+temporary object directory that is removed when the operation finishes. A busy
+message refuses the competing operation. Finish the active operation before
+retrying rather than deleting its worktree. Unfinished shared-worktree edits
+are preserved. After abrupt termination, retry the same command. The client
+can reclaim its recorded lock after verifying that the same-machine owner has
+exited and Git has released its index lock. It then checks the saved update
+before continuing. If a Git operation is still active, it refuses to take
+over. An incomplete or unverifiable process lock is preserved for maintainer
+inspection. This coordination does not prevent unrelated Git commands or older
+clients from changing the repository; do not run those concurrently with
+shared operations.
 
 If a push succeeds remotely but a local hook or signature fails, the
 diagnostic distinguishes those outcomes. Fix the local failure and retry the
@@ -256,10 +258,12 @@ with C<config --force>.
 Rewriting preserves author/committer fields and message bytes but changes
 commit IDs. Original signatures and merge-tag signatures are removed from
 rewritten objects, which are unsigned. Original upstream objects can be
-verified separately when available. Parent integration commits use normal Git
-hooks and configured signing. Newly exported commits may contain source-
-provenance headers; these are not cryptographic proof and do not publish parent-
-only files.
+verified separately when available. Parent integration commits use normal
+Git hooks and configured signing, including when an interrupted integration
+is retried. Hooks receive the same command environment markers on retries
+as on ordinary operations. Newly exported commits may contain source-
+provenance headers; these are not cryptographic proof and do not publish
+parent-only files.
 
 Directory moves, nested prefixed subrepos, and automatic divergent-upstream
 recovery are not supported in this format. Do not change the recorded prefix

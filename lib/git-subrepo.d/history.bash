@@ -1337,7 +1337,20 @@ history:status() {
   if [[ $history_state == tracking ]] && ! history:needs-repair &&
      git cat-file -e "$subrepo_commit^{commit}" 2>/dev/null &&
      { $status_log_wanted || $status_diff_wanted || $verbose_wanted; }; then
-    local candidate commits=()
+    local candidate objects commits=()
+    objects=$(git rev-parse --git-path objects)
+    objects=$(cd "$objects" && pwd -P)
+    # Export needs real projected objects for accurate log and diff output, but
+    # inspection must not publish them into the repository's object store.
+    # C-quote the alternate so colons, quotes and backslashes in paths are safe.
+    objects=${objects//\\/\\\\}
+    objects=${objects//\"/\\\"}
+    objects=${objects//$'\n'/\\n}
+    objects=${objects//$'\r'/\\r}
+    objects=${objects//$'\t'/\\t}
+    local -x GIT_ALTERNATE_OBJECT_DIRECTORIES="\"$objects\"${GIT_ALTERNATE_OBJECT_DIRECTORIES:+:$GIT_ALTERNATE_OBJECT_DIRECTORIES}"
+    local -x GIT_OBJECT_DIRECTORY=$history_tmp/status-objects
+    mkdir -p "$GIT_OBJECT_DIRECTORY"
     candidate=$(history:export)
     if [[ $candidate != "$subrepo_commit" ]]; then
       if $status_log_wanted || $verbose_wanted; then
