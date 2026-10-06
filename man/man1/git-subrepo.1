@@ -314,7 +314,10 @@ same push; the pending record lets git-subrepo finish without publishing the
 changes twice. Interrupted local integrations also retain a retry record.
 Retry on the same project branch; differing staged, untracked, ignored, or working\-
 file edits are preserved rather than overwritten. Fix the reported hook or
-signing failure before retrying. Retrying an interrupted \f(CW\*(C`\-\-all\*(C'\fR integration
+signing failure before retrying. If the editor or a later hook or signing step
+fails, the attempted commit message is saved before rollback. Retrying with
+\&\f(CW\*(C`\-\-edit\*(C'\fR reopens that saved draft rather than the original message; edits
+made by hooks are retained too. Retrying an interrupted \f(CW\*(C`\-\-all\*(C'\fR integration
 continues the remaining directories without repeating the integrations already
 completed in that request. Retarget keeps its completed import recorded until
 publication finishes, so an exact retry does not import the same changes

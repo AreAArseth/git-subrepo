@@ -621,6 +621,32 @@ Fetch the recorded shared history before synchronizing. Imported history can sti
 No project files were changed. Automatic upstream-history replacement is not supported; check the remote and branch with your maintainer."
 }
 
+history:integration-commit() {
+  local journal=$1 message_path previous=$history_tmp/previous-commit-message result=0
+  shift
+  message_path=$(git rev-parse --git-path COMMIT_EDITMSG)
+  # Pre-commit can fail before Git writes this attempt's message. Set the old
+  # draft aside so it cannot replace the intended message in the journal.
+  if [[ -e $message_path ]]; then
+    mv "$message_path" "$previous" ||
+      error "Could not preserve the previous commit message. The recovery record was kept."
+  fi
+  git commit --quiet "$@" || result=$?
+  if (( result != 0 )) && [[ -f $message_path ]]; then
+    # Keep editor and hook changes byte-for-byte, before any index rollback.
+    if ! { cp "$message_path" "$journal.message.new" &&
+      mv "$journal.message.new" "$journal.message"; }; then
+      error "Could not save the attempted commit message. Its COMMIT_EDITMSG, project files and recovery record were kept."
+    fi
+  fi
+  if [[ ! -e $message_path && -e $previous ]]; then
+    mv "$previous" "$message_path" ||
+      error "Could not restore the previous commit message. The recovery record was kept."
+  fi
+  rm -f "$previous"
+  return "$result"
+}
+
 history:integrate() {
   local shared_tree=$1 message=$2 mapped=${3:-}
   local index tree blob expected head merge_path mode_path result=0
@@ -659,6 +685,7 @@ history:integrate() {
   git config -f "$prepared" operation.mapped "$mapped"
   git config -f "$prepared" operation.directory "$subdir"
   git config -f "$prepared" operation.request "$(history:invocation)"
+  git config -f "$prepared" operation.edit "$edit_wanted"
   git config -f "$prepared" operation.phase "${history_phase:-complete}"
   if [[ ${history_phase:-} == retarget-import ]]; then
     git config -f "$prepared" operation.worktreeTip \
@@ -667,7 +694,9 @@ history:integrate() {
   if [[ $commit_msg_file ]]; then
     cp "$commit_msg_file" "$journal.message"
   else
-    printf '%s\n' "$message" > "$journal.message"
+    # Like Git's -m, terminate the message only if it has no final newline.
+    printf '%s' "$message" > "$journal.message"
+    [[ $message == *$'\n' ]] || printf '\n' >> "$journal.message"
   fi
   mv "$prepared" "$journal"
   git read-tree --reset -u "$tree"
@@ -675,7 +704,7 @@ history:integrate() {
     printf '%s\n' "$mapped" > "$merge_path"
     printf 'no-ff' > "$mode_path"
   fi
-  git commit --quiet "${args[@]}" || result=$?
+  history:integration-commit "$journal" "${args[@]}" || result=$?
   if (( result != 0 )); then
     head=$(git rev-parse HEAD)
     if [[ $head == "$expected" && $(git write-tree) == "$tree" ]] &&
@@ -768,7 +797,11 @@ Your files were kept. Return to that branch before retrying the saved command."
     printf '%s\n' "$mapped" > "$merge_path"
     printf 'no-ff' > "$(git rev-parse --git-path MERGE_MODE)"
   fi
-  git commit --quiet --file "$journal.message" ||
+  local args=(--file "$journal.message")
+  if [[ $(git config -f "$journal" --bool operation.edit || echo false) == true ]]; then
+    args+=(--edit)
+  fi
+  history:integration-commit "$journal" "${args[@]}" ||
     error "The interrupted update is still waiting for a successful commit. Fix the hook or signing error, then retry the same command."
   [[ $(git rev-parse 'HEAD^{tree}') == "$tree" &&
      $(git show -s --format=%P HEAD) == "$expected${mapped:+ $mapped}" ]] ||

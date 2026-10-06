@@ -22,6 +22,7 @@ version: 0.5.0-dev
   completed retarget imports resumable until publication finishes.
 - Reject explicitly empty history-format options; clarify migration defaults.
 - Keep existing shared-worktree indexes unchanged during retarget previews.
+- Preserve edited integration messages when retrying hook or signing failures.
 ---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST
