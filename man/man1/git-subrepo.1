@@ -529,12 +529,21 @@ The set of commands used above are described in detail below.
 .Sp
 The \f(CW\*(C`pull\*(C'\fR command accepts the \f(CW\*(C`\-\-all\*(C'\fR, \f(CW\*(C`\-\-branch=\*(C'\fR, \f(CW\*(C`\-\-edit\*(C'\fR, \f(CW\*(C`\-\-file\*(C'\fR,
 \&\f(CW\*(C`\-\-force\*(C'\fR, \f(CW\*(C`\-\-message=\*(C'\fR, \f(CW\*(C`\-\-remote=\*(C'\fR and \f(CW\*(C`\-\-update\*(C'\fR options.
-.ie n .IP """git subrepo retarget <subdir>|\-\-all [\-b <branch>] [\-r <remote>] [\-u] [\-f] [\-\-dry\-run]""" 4
-.el .IP "\f(CWgit subrepo retarget <subdir>|\-\-all [\-b <branch>] [\-r <remote>] [\-u] [\-f] [\-\-dry\-run]\fR" 4
-.IX Item "git subrepo retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run]"
+.ie n .IP """git subrepo retarget <subdir> [\-b <branch>] [\-r <remote>] [\-u] [\-f] [\-\-dry\-run]""" 4
+.el .IP "\f(CWgit subrepo retarget <subdir> [\-b <branch>] [\-r <remote>] [\-u] [\-f] [\-\-dry\-run]\fR" 4
+.IX Item "git subrepo retarget <subdir> [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run]"
 Move a shared folder to a different upstream branch or remote. This command
 can merge shared files, create commits in this project, and publish committed
 shared changes to the destination branch. It does not push the project branch.
+.Sp
+To retarget all shared folders while keeping their individual branch names:
+.Sp
+.Vb 1
+\&    git subrepo retarget \-\-all [\-r <remote>] [\-u] [\-f] [\-\-dry\-run]
+.Ve
+.Sp
+\&\f(CW\*(C`\-\-branch\*(C'\fR cannot be combined with \f(CW\*(C`\-\-all\*(C'\fR. Retarget each shared folder
+individually to change its branch.
 .Sp
 In prefixed history, the new upstream must contain the recorded original
 upstream history. Divergent replacement is refused. A new branch can be

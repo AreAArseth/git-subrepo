@@ -26,6 +26,7 @@ version: 0.5.0-dev
 - Allow retarget --force and its exact retries without enabling force pushes.
 - Preflight shared worktrees before forced replacement; scope nested workflows
   explicitly to legacy history.
+- Clean up test fixtures before capability skips and clarify retarget --all usage.
 ---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST

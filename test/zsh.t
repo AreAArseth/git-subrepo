@@ -8,14 +8,12 @@ source test/setup
 use Test::More
 
 if ! command -v docker >/dev/null; then
-  plan skip_all "The 'docker' utility is not installed"
   teardown
-  exit
+  plan skip_all "The 'docker' utility is not installed"
 fi
 if ! docker info > /dev/null 2>&1; then
-  plan skip_all 'The Docker daemon is not available'
   teardown
-  exit
+  plan skip_all 'The Docker daemon is not available'
 fi
 
 for zsh_version in 5.8 5.6 5.0.1 4.3.11; do

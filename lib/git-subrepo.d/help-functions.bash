@@ -16,7 +16,7 @@ log                  log <subdir> [--incoming] [--fetch] [--group-equivalent] [-
 migrate              migrate <subdir>|--all [--history=prefixed] [--dry-run]
 pull                 pull <subdir>|--all [-M|-R|-f] [-m <msg>] [--file=<msg file>] [-e] [-b <branch>] [-r <remote>] [-u]
 push                 push <subdir>|--all [<branch>] [-m msg] [--file=<msg file>] [-r <remote>] [-b <branch>] [-M|-R] [-u] [-f] [-s]
-retarget             retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run]
+retarget             retarget <subdir> [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run]
 status               status [<subdir>|--all|--ALL] [-F] [-q|-v]
 upgrade              upgrade
 version              version [-q|-v]
@@ -396,12 +396,19 @@ help:push() {
 help:retarget() {
     cat <<'...'
 
-  Usage: git subrepo retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run]
+  Usage: git subrepo retarget <subdir> [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run]
 
 
   Move a shared folder to a different upstream branch or remote. This command
   can merge shared files, create commits in this project, and publish committed
   shared changes to the destination branch. It does not push the project branch.
+
+  To retarget all shared folders while keeping their individual branch names:
+
+    git subrepo retarget --all [-r <remote>] [-u] [-f] [--dry-run]
+
+  `--branch` cannot be combined with `--all`. Retarget each shared folder
+  individually to change its branch.
 
   In prefixed history, the new upstream must contain the recorded original
   upstream history. Divergent replacement is refused. A new branch can be

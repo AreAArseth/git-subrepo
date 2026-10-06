@@ -8,14 +8,12 @@ version=$(git version | cut -d ' ' -f3)
 major=${version%%.*}
 minor=${version#*.}; minor=${minor%%.*}
 if (( major < 2 || (major == 2 && minor < 34) )); then
-  plan skip_all 'Real SSH commit signing requires Git 2.34 or newer'
   teardown
-  exit
+  plan skip_all 'Real SSH commit signing requires Git 2.34 or newer'
 fi
 command -v ssh-keygen > /dev/null || {
-  plan skip_all 'Real SSH commit signing requires ssh-keygen'
   teardown
-  exit
+  plan skip_all 'Real SSH commit signing requires ssh-keygen'
 }
 
 clone-foo-and-bar

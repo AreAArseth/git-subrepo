@@ -5,9 +5,8 @@ source test/setup
 use Test::More
 
 if ! git init -q --object-format=sha256 "$TMP/shared" 2> "$TMP/capability"; then
-  plan skip_all 'This Git does not support SHA-256 repositories'
   teardown
-  exit
+  plan skip_all 'This Git does not support SHA-256 repositories'
 fi
 (
   cd "$TMP/shared"
