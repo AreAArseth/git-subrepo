@@ -5,6 +5,10 @@ version: 0.5.0-dev
 - Add migrate --all previews and preflight checks; clarify push/pull prerequisites.
 - Batch prefixed-history reads, tree creation and mapping updates during migration.
 - Reject historical nested metadata before rewriting, including quoted filenames.
+- Preserve newer project edits and manual worktree commits during retarget;
+  refuse simultaneous edits, support previews, and make completed retargets no-ops.
+- Allow bounded, labelled history with pending worktrees and grouped one-line
+  output; batch log metadata reads and clarify remote freshness and publication.
 ---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST

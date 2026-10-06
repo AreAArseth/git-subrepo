@@ -327,8 +327,20 @@ the same arguments. Keep reading…
   This can group a verified aggregate squash without treating all its source
   commits as individually identical to the squash.
 
-  Put custom Git log options after `--`. Custom formatting is available without
-  grouping; grouped output supports the standard display or `--oneline`.
+  For a quick, bounded view:
+
+    git subrepo log shared --oneline --group-equivalent -- -5
+
+  Count limits (`-5`, `-n 5`, or `--max-count=5`) work with labelled output and
+  grouping. The limit selects commits before grouping; equivalent entries are
+  grouped only when all members are selected, so fewer than five groups may
+  appear. No history is silently hidden when no limit is supplied.
+
+  Put other Git log options after `--`. Those options delegate to Git's output,
+  without subrepo labels, and cannot be combined with grouping. Top-level
+  `--oneline` still applies; an explicit Git format can override it.
+  Browsing works even with unfinished files in a shared worktree. `--fetch`
+  updates fetched objects and refs but leaves that worktree untouched.
   This command does not repair or modify project history.
 
 - `git subrepo pull <subdir>|--all [-M|-R|-f] [-m <msg>] [--file=<msg file>] [-e] [-b <branch>] [-r <remote>] [-u]`
@@ -379,34 +391,45 @@ the same arguments. Keep reading…
   The `pull` command accepts the `--all`, `--branch=`, `--edit`, `--file`,
   `--force`, `--message=`, `--remote=` and `--update` options.
 
-- `git subrepo retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f]`
+- `git subrepo retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run]`
 
-  Retarget a subrepo to a different upstream branch or remote.
+  Move a shared folder to a different upstream branch or remote. This command
+  can merge shared files, create commits in this project, and publish committed
+  shared changes to the destination branch. It does not push the project branch.
 
-  Use this when the upstream branch (or remote) has been changed and the local
-  subrepo history is not contained in the new upstream. The `retarget` command
-  creates or reuses the `subrepo/<subdir>` branch, merges in the new upstream,
-  and pushes the merged history to the upstream branch.
+  In prefixed history, the new upstream must contain the recorded original
+  upstream history. Divergent replacement is refused. A new branch can be
+  created from the recorded shared history. Tracking settings are committed
+  automatically; do not manually edit or commit tracking IDs.
 
-  If merge conflicts occur, resolve them in the worktree and commit the merge,
-  then rerun `git subrepo retarget <subdir>`.
+  Preview prefixed retarget with `--dry-run`. It checks the destination remote
+  and shows the old/new mapping, locally available incoming history, shared-file
+  differences, and any existing worktree. It never fetches objects, changes refs,
+  commits, or publishes. If destination objects are missing, incoming differences
+  are explicitly unknown. The preview does not simulate a merge.
 
-  Use `--branch` and/or `--remote` to override the upstream. For `retarget`,
-  those overrides are persisted into `<subdir>/.gitrepo` by default.
-  You may still pass `--update` explicitly.
-  Commit the `<subdir>/.gitrepo` change before pulling.
+  A stale, untouched shared worktree is refreshed from current project changes.
+  Worktree-only commits and completed conflict resolutions are preserved. If
+  both copies have changed, retarget stops and names both locations. Preserve
+  the worktree commits on a separate branch and reconcile the copies before
+  retrying; do not delete unknown work or use force to bypass this check.
+  An identical, completed retarget makes no new commit.
 
-  The `retarget` command accepts the `--all`, `--branch=`, `--remote=`,
-  `--update` and `--force` options.
+  If conflicts occur, resolve and finish the merge or rebase in the printed
+  worktree, then rerun the original retarget command with the same remote and
+  branch options. Do not substitute a normal subrepo commit.
 
-  For prefixed history, the new upstream must contain the recorded original
-  upstream history. Divergent replacement is refused. Successful retargeting
-  synchronizes the shared contents and records the new settings in the project.
-  A new branch can be created from the recorded shared history. The command
-  publishes shared changes to that branch; it does not push parent-only files.
-  Its settings are committed automatically in prefixed mode.
+  In legacy history only, retarget also supports an upstream without the old
+  shared history. It creates or reuses the shared branch, merges the new upstream
+  and pushes it. Commit its changed `.gitrepo` settings before the next pull.
+  Legacy retarget does not support `--dry-run`.
 
-- `git subrepo push <subdir>|--all [<branch>] [-m msg] [--file=<msg file>] [-r <remote>] [-b <branch>] [-M|-R] [-u] [-f] [-s] [-N]`
+  Use `--branch` and/or `--remote` to override the upstream. Retarget persists
+  those overrides by default; `--update` may also be supplied explicitly.
+  The command accepts `--all`, `--branch=`, `--remote=`, `--update`, `--force`,
+  and (for prefixed history) `--dry-run`.
+
+- `git subrepo push <subdir>|--all [<branch>] [-m msg] [--file=<msg file>] [-r <remote>] [-b <branch>] [-M|-R] [-u] [-f] [-s]`
 
   Push a properly merged subrepo branch back upstream.
 
@@ -446,7 +469,15 @@ the same arguments. Keep reading…
   resolve incoming changes first, or use `retarget` for a supported upstream
   transition.
 
-  The `push` command accepts the `--all`, `--branch=`, `--dry-run`, `--file`,
+  A subrepo push sends shared-directory files, not project-only files. Exported
+  commit messages retain the original message, which may mention both kinds of
+  files. Publish the project's new tracking commits separately with `git push`
+  when ready. Imported shared commits can make Git's project ahead-count large;
+  that count is not the number of unpublished shared edits. Use subrepo status
+  for folder-level actions and `git log --first-parent --oneline` for project
+  integration history.
+
+  The `push` command accepts the `--all`, `--branch=`, `--file`,
   `--force`, `--merge`, `--message`, `--rebase`, `--remote=`, `--squash` and
   `--update` options.
 
@@ -496,6 +527,11 @@ the same arguments. Keep reading…
   `--quiet` flag is used, just print the subrepo names, one per line.
 
   The `--verbose` option will show all the recent local and upstream commits.
+  In prefixed mode it also shows the original and imported tracking IDs.
+  Ordinary status is offline: it explicitly says the remote was not checked,
+  and incoming information is cached. Use `--fetch` to check the remote now.
+  A later remote update still requires another fetch; status does not
+  continuously synchronize projects.
 
   Use `--ALL` to show the subrepos of the subrepos (ie the "subsubrepos"), if
   any.
@@ -592,10 +628,11 @@ the same arguments. Keep reading…
   Use a different upstream branch-name than the remote HEAD or the one saved in
   `.gitrepo` locally.
 
-- `--dry-run` (`-N`)
+- `--dry-run`
 
-  For the push command, do everything up until the push and then print out the
-  actual `git push` command needed to finish the operation.
+  Preview migration or prefixed retarget without changing files, refs, or
+  history. Migration is offline; retarget checks the destination with the remote
+  but does not fetch or publish. This option is not supported by push.
 
 - `--edit` (`-e`)
 

@@ -29,7 +29,7 @@ _git-subrepo() {
         '--log-limit[Limit the number of commits shown with --log (default 5)]:log-limit' \
         '--diff[Show diffstat for pending pull/push]' \
         '--history[History for new subrepos: prefixed (default) or legacy]:history' \
-        '--dry-run[Preview migration without changing the repository]' \
+        '--dry-run[Preview migration or retarget without changing the repository]' \
         '--accept-repair[Approve the exact history repair previously proposed]:accept-repair' \
         '--incoming[Show fetched changes not yet imported]' \
         '--group-equivalent[Group verified representations of the same shared change]' \

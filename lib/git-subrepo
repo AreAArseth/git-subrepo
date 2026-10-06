@@ -84,7 +84,7 @@ l,log       Show commit summaries for pending pull/push
 log-limit=  Limit the number of commits shown with --log (default 5)
 diff        Show diffstat for pending pull/push
 history=    History for new subrepos: prefixed (default) or legacy
-dry-run     Preview migration without changing the repository
+dry-run     Preview migration or retarget without changing the repository
 accept-repair= Approve the exact history repair previously proposed
 incoming    Show fetched changes not yet imported
 group-equivalent Group verified representations of the same shared change
@@ -321,9 +321,20 @@ command:pull() {
 command:retarget() {
   command-setup +subdir
 
+  if $history_dry_run; then
+    [[ $history_mode == prefixed ]] ||
+      error "Retarget previews require prefixed history. No files or refs were changed."
+    history:preview-retarget
+    return
+  fi
   subrepo:retarget
+  if [[ $history_mode == prefixed && $CODE == -2 ]]; then
+    say "'$subdir/' is already tracking this branch; no changes made."
+    return
+  fi
   if [[ $history_mode == prefixed ]] && OK; then
     say "Retargeted and synchronized '$subdir/' with '$subrepo_remote' ($subrepo_branch)."
+    say "Project-only files were not sent upstream. Publish the project branch separately with git push when ready."
     return
   fi
   if OK; then
@@ -350,6 +361,10 @@ command:push() {
   subrepo:push
   if OK; then
     say "Subrepo '$subdir' pushed to '$subrepo_remote' ($subrepo_branch)."
+    if [[ $history_mode == prefixed ]]; then
+      say "Published shared files only; commit messages may also describe project-only changes."
+      say "The project has new tracking commits. Publish the project branch separately with git push when ready."
+    fi
   elif [[ $CODE -eq -2 ]]; then
     say "Subrepo '$subdir' has no new commits to push."
   elif [[ $CODE -eq -3 ]]; then
@@ -1634,8 +1649,8 @@ get-command-options() {
     [[ $history_option == prefixed || $history_option == legacy ]] ||
       usage-error "Choose --history=prefixed or --history=legacy."
   fi
-  ! $history_dry_run || [[ $command == migrate ]] ||
-    usage-error "--dry-run is only for migrate."
+  ! $history_dry_run || [[ $command =~ ^(migrate|retarget)$ ]] ||
+    usage-error "--dry-run is only for migrate or retarget."
   [[ ! $history_accept || $command =~ ^(pull|push|branch|commit|retarget)$ ]] ||
     usage-error "--accept-repair is only for a command that can repair history."
   if $history_incoming || $history_group || $history_oneline; then
@@ -1778,8 +1793,16 @@ command-setup() {
     done < <(git worktree list --porcelain)
     if [[ $command == commit && -z $_worktree && -z $subrepo_commit_ref ]]; then
       error "There is no worktree available, use the branch command first"
-    elif [[ ! $command =~ ^(branch|clean|commit|push|retarget)$ && $_worktree ]]; then
-      if [[ -e $gitrepo ]]; then
+    elif [[ ! $command =~ ^(branch|clean|commit|push|retarget|log)$ && $_worktree ]]; then
+      if [[ $history_mode == prefixed ]]; then
+        local worktree_status
+        worktree_status=$(git -C "$_worktree" status --short)
+        error "There is already a worktree with branch subrepo/$subdir.
+Shared worktree: $_worktree
+${worktree_status:-No uncommitted files; committed work may still need preserving.}
+Finish the existing shared operation there before retrying.
+Inspect and preserve its commits before using 'git subrepo clean $(printf '%q' "$subdir")'; do not discard it just to continue."
+      elif [[ -e $gitrepo ]]; then
         error "There is already a worktree with branch subrepo/$subdir.
 Use the --force flag to override this check or perform a subrepo clean
 to remove the worktree."
@@ -1801,7 +1824,7 @@ Use the --force flag to override this check or remove the worktree with
 
   if [[ $history_mode == prefixed ]]; then
     history:validate-path
-    if [[ $command =~ ^(pull|push|branch|commit|retarget)$ ]]; then
+    if [[ $command =~ ^(pull|push|branch|commit|retarget)$ ]] && ! $history_dry_run; then
       history:ensure-healthy
     fi
   fi

@@ -975,7 +975,7 @@ Then retry your push."
 }
 
 history:retarget() {
-  local remote_tip branch=
+  local remote_tip branch='' snapshot target=subrepo/$subref
   if [[ $history_retarget_ready == "$subdir" ]]; then
     history_retarget_ready=
     history:push
@@ -984,18 +984,42 @@ history:retarget() {
   fi
   remote_tip=$(git ls-remote "$subrepo_remote" "refs/heads/$subrepo_branch") ||
     error "Could not contact the shared repository. Check the remote and your connection; nothing was pushed."
+  remote_tip=${remote_tip%%$'\t'*}
+  if [[ $remote_tip ]]; then
+    subrepo:fetch
+    remote_tip=$upstream_head_commit
+  fi
+  worktree=$history_common/tmp/$target
+  snapshot=$(history:tree HEAD)
+  if [[ -d $worktree ]]; then
+    history:refresh-retarget-worktree "$snapshot"
+  fi
+  if [[ $remote_tip == "$subrepo_commit" &&
+        $subrepo_remote == "$history_recorded_remote" &&
+        $subrepo_branch == "$history_recorded_branch" &&
+        ! -f $history_common/subrepo-pending/$subref/push ]] &&
+     git cat-file -e "$subrepo_commit^{commit}" 2>/dev/null &&
+     [[ $snapshot == "$(git rev-parse "$subrepo_commit^{tree}")" ]] &&
+     { [[ ! -d $worktree ]] || [[ $(git -C "$worktree" rev-parse 'HEAD^{tree}') == "$snapshot" ]]; }; then
+    OK=false CODE=-2
+    return
+  fi
   if [[ ! $remote_tip ]]; then
     if ! git cat-file -e "$subrepo_commit^{commit}" 2>/dev/null; then
       error "Creating the new branch requires the original shared history.
 Fetch the previously tracked branch before retrying; nothing was pushed."
     fi
+    if [[ -d $worktree ]]; then
+      upstream_head_commit=$subrepo_commit
+      subrepo_commit_ref=$target
+      local history_phase=retarget-import
+      history:commit
+      history_phase=complete
+    fi
     history:push
     OK=true
     return
   fi
-  subrepo:fetch
-  local target=subrepo/$subref
-  worktree=$history_common/tmp/$target
   if [[ ! -d $worktree ]]; then
     git:delete-branch "$target"
     history:branch "$target"
@@ -1011,6 +1035,80 @@ Fetch the previously tracked branch before retrying; nothing was pushed."
   history_phase=complete
   history:push
   OK=true
+}
+
+history:preview-retarget() {
+  local tip path=$history_common/tmp/subrepo/$subref
+  printf "Preview retarget of '%s/':\n  From: %s (%s)\n  To:   %s (%s)\n" \
+    "$subdir" "$history_recorded_remote" "$history_recorded_branch" "$subrepo_remote" "$subrepo_branch"
+  tip=$(git ls-remote "$subrepo_remote" "refs/heads/$subrepo_branch") ||
+    error "Could not check the destination. No files, refs, or tracking settings were changed."
+  tip=${tip%%$'\t'*}
+  if [[ ! $tip ]]; then
+    printf '  Destination branch does not exist; retarget will create it and publish shared history.\n'
+  elif git cat-file -e "$tip^{commit}" 2>/dev/null &&
+       git cat-file -e "$subrepo_commit^{commit}" 2>/dev/null; then
+    history:check-upstream "$tip"
+    printf '  Incoming commits: %s\n' "$(git rev-list --count "$subrepo_commit..$tip")"
+    printf '  Destination file differences from this project (before merging):\n'
+    git diff --stat "$tip" "HEAD:$subdir" -- . ':(exclude).gitrepo'
+  else
+    printf '  Destination tip: %s (not available locally; incoming changes not yet compared).\n' "$tip"
+    printf '  To inspect incoming history, fetch the destination explicitly:\n    git subrepo fetch %q --remote %q --branch %q\n' \
+      "$subdir" "$subrepo_remote" "$subrepo_branch"
+  fi
+  if [[ $subrepo_commit ]] && git cat-file -e "$subrepo_commit^{commit}" 2>/dev/null; then
+    printf '  Committed project-side shared changes since the recorded upstream:\n'
+    git diff --stat "$subrepo_commit" "HEAD:$subdir" -- . ':(exclude).gitrepo'
+  else
+    printf '  Original shared history is unavailable locally; local changes cannot yet be compared.\n'
+  fi
+  if [[ -d $path ]]; then
+    printf '  Existing shared worktree: %s\n' "$path"
+    printf '  Uncommitted work there (empty output means clean):\n'
+    git -C "$path" status --short
+    printf '  Worktree/project file differences:\n'
+    git diff --stat "$(git -C "$path" rev-parse HEAD)" "HEAD:$subdir" -- . ':(exclude).gitrepo'
+  fi
+  printf '%s\n' \
+    'Retarget may merge shared files, create project commits, and publish to the destination.' \
+    'This preview does not simulate merges or guarantee a conflict-free result.' \
+    'Project-only files are never published there. The project branch needs its own git push.' \
+    'Preview only: the remote was checked, but no objects were fetched, refs changed, commits created, or files published.'
+}
+
+history:refresh-retarget-worktree() {
+  local snapshot=$1 baseline candidate current
+  if [[ -n $(git -C "$worktree" status --porcelain) ||
+        -n $(git -C "$worktree" ls-files --others) ||
+        -f $(git -C "$worktree" rev-parse --git-path MERGE_HEAD) ||
+        -d $(git -C "$worktree" rev-parse --git-path rebase-merge) ||
+        -d $(git -C "$worktree" rev-parse --git-path rebase-apply) ]]; then
+    error "The shared worktree '$worktree' contains unfinished changes or a merge/rebase.
+Finish and commit the work there, then retry the original retarget command.
+Your project and shared worktree were kept; nothing was pushed."
+  fi
+  [[ $(git -C "$worktree" symbolic-ref -q HEAD) == "refs/heads/subrepo/$subref" ]] ||
+    error "The shared worktree '$worktree' is on a different branch.
+Preserve its work and return it to 'subrepo/$subref' before retrying retarget; nothing was pushed."
+  current=$(git -C "$worktree" rev-parse HEAD)
+  [[ $(git rev-parse "$current^{tree}") != "$snapshot" ]] || return 0
+  baseline=$(git rev-parse --verify "$refs_subrepo_branch^{commit}" 2>/dev/null) || baseline=
+  if [[ $baseline ]]; then
+    [[ $(git rev-parse "$baseline^{tree}") != "$snapshot" ]] || return 0
+    if [[ $current == "$baseline" ]]; then
+      candidate=$(history:export)
+      git -C "$worktree" merge --ff-only "$candidate" ||
+        error "The shared worktree could not be refreshed from the project. Its files were kept; nothing was pushed."
+      git:make-ref "$refs_subrepo_branch" "$candidate"
+      return
+    fi
+  fi
+  error "Both the project's '$subdir/' and its shared worktree may contain changes:
+  Project: $(git rev-parse --show-toplevel)/$subdir
+  Shared worktree: $worktree
+Nothing was integrated or pushed. Preserve the worktree commits on a separate branch,
+then reconcile both copies before retrying. Do not use --force or delete the worktree to bypass this check."
 }
 
 history:conflict() {
@@ -1140,10 +1238,20 @@ history:status() {
   elif [[ $upstream_head_commit && $subrepo_commit != "$(git rev-parse "$refs_subrepo_fetch")" ]]; then
     printf "  Incoming changes available. Run: git subrepo pull %q\n" "$subdir"
   else
-    printf '  Up to date with the last fetched shared history.\n'
+    if $fetch_wanted; then
+      printf '  Shared content is up to date.\n'
+    else
+      printf '  No local changes relative to the last fetched shared history.\n'
+    fi
+  fi
+  if $fetch_wanted; then
+    printf '  Remote checked by this command.\n'
+  else
+    printf '  Remote not checked by this command; incoming information is cached.\n'
+    printf '  To check for updates: git subrepo status %q --fetch\n' "$subdir"
   fi
   printf '  Remote: %s\n  Branch: %s\n' "$subrepo_remote" "$subrepo_branch"
-  if [[ $history_state == tracking ]]; then
+  if [[ $history_state == tracking ]] && $verbose_wanted; then
     printf '  Original upstream commit: %s\n  Imported project commit: %s\n' \
       "$subrepo_commit" "$history_mapped"
   fi
@@ -1233,7 +1341,7 @@ history:equivalent-range() {
 command:log() {
   command-setup +subdir
   $fetch_wanted && subrepo:fetch
-  local revisions=(HEAD) paths=(-- ":(literal)$subdir") commit label record source subject
+  local revisions=(HEAD) paths=(-- ":(literal)$subdir") commit label record source subject details
   if $history_incoming; then
     if ! git cat-file -e "$refs_subrepo_fetch^{commit}" 2>/dev/null ||
        ! git cat-file -e "$subrepo_commit^{commit}" 2>/dev/null; then
@@ -1244,24 +1352,54 @@ command:log() {
     revisions=("$subrepo_commit..$refs_subrepo_fetch")
     paths=()
   fi
-  if [[ ${#history_log_args[@]} != 0 ]]; then
-    if [[ ${#history_log_args[@]} == 1 && ${history_log_args[0]} == --oneline ]]; then
-      history_oneline=true
-    else
-      $history_group &&
-        error "Grouped history supports standard or --oneline output. Remove --group-equivalent to use custom Git formatting."
-      git log "${history_log_args[@]}" "${revisions[@]}" "${paths[@]}"
-      return
+  local selection=() custom=() arg count pending_count=false
+  for arg in "${history_log_args[@]}"; do
+    if $pending_count; then
+      [[ $arg =~ ^[0-9]+$ ]] || error "'$arg' is not a nonnegative history count."
+      selection+=("--max-count=$arg")
+      pending_count=false
+      continue
     fi
+    case "$arg" in
+      --oneline) history_oneline=true ;;
+      -n|--max-count) pending_count=true ;;
+      --max-count=*|-n[0-9]*|-[0-9]*)
+        count=${arg#--max-count=}; count=${count#-n}; count=${count#-}
+        [[ $count =~ ^[0-9]+$ ]] || error "'$arg' is not a nonnegative history count."
+        selection+=("--max-count=$count") ;;
+      *) custom+=("$arg") ;;
+    esac
+  done
+  ! $pending_count || error "A nonnegative history count is required after -n or --max-count."
+  if [[ ${#custom[@]} != 0 ]]; then
+    $history_group &&
+      error "Grouped history does not support '${custom[0]}'. Use --oneline --group-equivalent -- -5 for bounded labelled history. Remove --group-equivalent to use other Git options."
+    local format=()
+    $history_oneline && format+=(--oneline)
+    git log "${format[@]}" "${history_log_args[@]}" "${revisions[@]}" "${paths[@]}"
+    return
   fi
-  local commits
-  commits=$(git rev-list --topo-order "${revisions[@]}" "${paths[@]}")
-  declare -A groups=() omitted=()
+  local commits line metadata=$history_tmp/log-metadata
+  commits=$(git rev-list --topo-order "${selection[@]}" "${revisions[@]}" "${paths[@]}")
+  [[ $commits ]] || return 0
+  declare -A groups=() omitted=() selected=() records=() provenance=()
+  # Raw log preserves custom headers and indents messages, so message text cannot
+  # masquerade as provenance. Two batch reads replace per-entry display processes.
+  git log --no-walk=unsorted --stdin --no-show-signature --no-decorate --no-color \
+    --format=raw <<< "$commits" > "$metadata"
+  while IFS= read -r line; do
+    case "$line" in
+      commit\ *) commit=${line#commit }; selected[$commit]=true ;;
+      git-subrepo-rewrite\ *) records[$commit]=${line#git-subrepo-rewrite } ;;
+      git-subrepo-source\ *|git-subrepo-source-range\ *) provenance[$commit]=true ;;
+    esac
+  done < "$metadata"
   if $history_group; then
     while IFS= read -r commit; do
       [[ $commit ]] || continue
+      [[ ${provenance[$commit]-} ]] || continue
       if source=$(history:equivalent-source "$commit"); then
-        if [[ $source != "$commit" && $'\n'"$commits"$'\n' == *$'\n'"$source"$'\n'* ]]; then
+        if [[ $source != "$commit" && ${selected[$source]-} ]]; then
           groups[$source]="${groups[$source]-} $commit"
           omitted[$commit]=true
         fi
@@ -1270,7 +1408,7 @@ command:log() {
         while IFS= read -r member; do
           members+=("$member")
           representative=$member
-          [[ $'\n'"$commits"$'\n' == *$'\n'"$member"$'\n'* ]] || complete=false
+          [[ ${selected[$member]-} ]] || complete=false
         done <<< "$source"
         if $complete; then
           groups[$representative]=" $commit"
@@ -1284,14 +1422,14 @@ command:log() {
       fi
     done <<< "$commits"
   fi
-  while IFS= read -r commit; do
-    [[ $commit ]] || continue
+  git log --no-walk=unsorted --stdin --no-show-signature --no-decorate --no-color -z \
+    --format='%H%x00%s%x00  Author: %an <%ae>%n  Date: %aI%n%n%B' <<< "$commits" > "$metadata"
+  while IFS= read -r -d '' commit && IFS= read -r -d '' subject && IFS= read -r -d '' details; do
     [[ ! ${omitted[$commit]-} ]] || continue
     label=local
     $history_incoming && label=upstream
-    record=$(history:header "$commit" git-subrepo-rewrite)
+    record=${records[$commit]-}
     [[ ! $record ]] || label=imported
-    subject=$(git show -s --format=%s "$commit")
     printf '%s [%s] %s\n' "${commit:0:12}" "$label" "$subject"
     if [[ ${groups[$commit]-} ]]; then
       printf '  Same shared change (not the whole project commit): %s%s\n' "$commit" "${groups[$commit]}"
@@ -1300,7 +1438,7 @@ command:log() {
       printf '  Original upstream commit: %s\n' "$record"
     fi
     if ! $history_oneline; then
-      git show -s --format='  Author: %an <%ae>%n  Date: %aI%n%n%B' "$commit"
+      printf '%s\n' "$details"
     fi
-  done <<< "$commits"
+  done < "$metadata"
 }

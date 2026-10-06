@@ -90,5 +90,62 @@ is "$(cd "$repo" && git subrepo status bar --quiet)" bar \
 is "$(cd "$repo" && git subrepo status --quiet)" "$(printf 'another\nbar\nlegacy')" \
   'quiet mixed-mode status prints every path once with no labels'
 
+for group in '' --group-equivalent; do
+  for limit in '-5' '-n 5' '--max-count=5'; do
+    read -r -a args <<< "$limit"
+    status=0
+    # shellcheck disable=SC2086
+    (cd "$repo" && git subrepo log bar --oneline $group -- "${args[@]}") > "$TMP/bounded" 2>&1 || status=$?
+    is "$status" 0 "bounded log accepts $group $limit"
+    count=$(grep -Ec '^[0-9a-f]{12} \[(local|imported)\] ' "$TMP/bounded" || true)
+    status=0
+    [[ $count -gt 0 && $count -le 5 ]] || status=1
+    is "$status" 0 'bounded output keeps labelled short entries'
+    unlike "$(cat "$TMP/bounded")" 'Author:|Date:|^commit ' 'top-level oneline is honored'
+  done
+done
+(cd "$repo" && git subrepo log bar --oneline -- --max-count=0) > "$TMP/zero"
+is "$(cat "$TMP/zero")" "" 'zero count prints no entries'
+(cd "$repo" && git subrepo log bar --oneline -- --no-decorate -1) > "$TMP/passthrough"
+is "$(wc -l < "$TMP/passthrough" | tr -d ' ')" 1 'oneline composes with arbitrary Git options'
+unlike "$(cat "$TMP/passthrough")" 'Author:|^commit ' 'custom passthrough does not lose oneline'
+for invalid in '-n' '--max-count=bad'; do
+  status=0
+  (cd "$repo" && git subrepo log bar --group-equivalent -- "$invalid") > "$TMP/invalid" 2>&1 || status=$?
+  is "$status" 1 "invalid count $invalid fails explicitly"
+  like "$(cat "$TMP/invalid")" 'nonnegative history count' 'count diagnostic explains the input requirement'
+done
+(cd "$repo" && git subrepo status bar) > "$TMP/cached"
+like "$(cat "$TMP/cached")" 'Remote not checked' 'offline status leads users to check remote freshness'
+unlike "$(cat "$TMP/cached")" 'Original upstream commit:' 'ordinary status keeps raw IDs out of the summary'
+(cd "$repo" && git subrepo status bar --fetch --verbose) > "$TMP/checked"
+like "$(cat "$TMP/checked")" 'Remote checked' 'explicit fetch distinguishes current from cached status'
+like "$(cat "$TMP/checked")" 'Original upstream commit:' 'verbose status retains tracking IDs'
+
+(cd "$repo" && git subrepo branch bar --force) > /dev/null
+worktree=$repo/.git/tmp/subrepo/bar
+status=0
+(cd "$repo" && git subrepo log bar --oneline -- -5) > "$TMP/clean-worktree-log" 2>&1 || status=$?
+is "$status" 0 'clean shared worktree does not block browsing'
+echo unfinished > "$worktree/unfinished"
+before=$(git -C "$repo" rev-parse HEAD)
+worktree_before=$(git -C "$worktree" status --porcelain)
+for fetch in '' --fetch; do
+  status=0
+  # shellcheck disable=SC2086
+  (cd "$repo" && git subrepo log bar --oneline $fetch -- -5) > "$TMP/worktree-log" 2>&1 || status=$?
+  is "$status" 0 "history browsing $fetch works with a pending shared worktree"
+  is "$(git -C "$repo" rev-parse HEAD)" "$before" 'browsing preserves parent HEAD'
+  is "$(git -C "$worktree" status --porcelain)" "$worktree_before" 'browsing preserves pending work'
+  is "$(cat "$worktree/unfinished")" unfinished 'browsing never removes worktree files'
+done
+status=0
+(cd "$repo" && git subrepo pull bar) > "$TMP/blocked-pull" 2>&1 || status=$?
+is "$status" 1 'a mutating pull still protects the pending shared worktree'
+is "$(sed -n 's/^Shared worktree: //p' "$TMP/blocked-pull")" "$(cd "$worktree" && pwd -P)" \
+  'blocked mutation identifies the worktree location'
+like "$(cat "$TMP/blocked-pull")" 'unfinished' 'blocked mutation shows unfinished files'
+unlike "$(cat "$TMP/blocked-pull")" 'Use the --force' 'blocked mutation does not recommend bypassing preservation'
+
 done_testing
 teardown

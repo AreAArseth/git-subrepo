@@ -25,7 +25,7 @@ complete -c git-subrepo -l log -s l -d 'Show commit summaries for pending pull/p
 complete -c git-subrepo -l log-limit -d 'Limit the number of commits shown with --log (default 5)' -r
 complete -c git-subrepo -l diff -d 'Show diffstat for pending pull/push'
 complete -c git-subrepo -l history -d 'History for new subrepos: prefixed (default) or legacy' -r
-complete -c git-subrepo -l dry-run -d 'Preview migration without changing the repository'
+complete -c git-subrepo -l dry-run -d 'Preview migration or retarget without changing the repository'
 complete -c git-subrepo -l accept-repair -d 'Approve the exact history repair previously proposed' -r
 complete -c git-subrepo -l incoming -d 'Show fetched changes not yet imported'
 complete -c git-subrepo -l group-equivalent -d 'Group verified representations of the same shared change'

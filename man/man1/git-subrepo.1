@@ -435,9 +435,22 @@ export provenance and actual changes. Missing or unverifiable records stay
 separate. This can group a verified aggregate squash without treating all its
 source commits as individually identical to the squash.
 .Sp
-Put custom Git log options after \f(CW\*(C`\-\-\*(C'\fR. Custom formatting is available without
-grouping; grouped output supports the standard display or \f(CW\*(C`\-\-oneline\*(C'\fR. This
-command does not repair or modify project history.
+For a quick, bounded view:
+.Sp
+.Vb 1
+\&    git subrepo log shared \-\-oneline \-\-group\-equivalent \-\- \-5
+.Ve
+.Sp
+Count limits (\f(CW\*(C`\-5\*(C'\fR, \f(CW\*(C`\-n 5\*(C'\fR, or \f(CW\*(C`\-\-max\-count=5\*(C'\fR) work with labelled output
+and grouping. The limit selects commits before grouping; equivalent entries
+are grouped only when all members are selected, so fewer than five groups may
+appear. No history is silently hidden when no limit is supplied.
+.Sp
+Put other Git log options after \f(CW\*(C`\-\-\*(C'\fR. Those options delegate to Git's output,
+without subrepo labels, and cannot be combined with grouping. Top-level \f(CW\*(C`\-\-oneline\*(C'\fR still applies; an explicit Git format can override it. Browsing works
+even with unfinished files in a shared worktree. \f(CW\*(C`\-\-fetch\*(C'\fR updates fetched
+objects and refs but leaves that worktree untouched. This command does not
+repair or modify project history.
 .ie n .IP """git subrepo pull <subdir>|\-\-all [\-M|\-R|\-f] [\-m <msg>] [\-\-file=<msg file>] [\-e] [\-b <branch>] [\-r <remote>] [\-u]""" 4
 .el .IP "\f(CWgit subrepo pull <subdir>|\-\-all [\-M|\-R|\-f] [\-m <msg>] [\-\-file=<msg file>] [\-e] [\-b <branch>] [\-r <remote>] [\-u]\fR" 4
 .IX Item "git subrepo pull <subdir>|--all [-M|-R|-f] [-m <msg>] [--file=<msg file>] [-e] [-b <branch>] [-r <remote>] [-u]"
@@ -490,35 +503,47 @@ The set of commands used above are described in detail below.
 .Sp
 The \f(CW\*(C`pull\*(C'\fR command accepts the \f(CW\*(C`\-\-all\*(C'\fR, \f(CW\*(C`\-\-branch=\*(C'\fR, \f(CW\*(C`\-\-edit\*(C'\fR, \f(CW\*(C`\-\-file\*(C'\fR,
 \&\f(CW\*(C`\-\-force\*(C'\fR, \f(CW\*(C`\-\-message=\*(C'\fR, \f(CW\*(C`\-\-remote=\*(C'\fR and \f(CW\*(C`\-\-update\*(C'\fR options.
-.ie n .IP """git subrepo retarget <subdir>|\-\-all [\-b <branch>] [\-r <remote>] [\-u] [\-f]""" 4
-.el .IP "\f(CWgit subrepo retarget <subdir>|\-\-all [\-b <branch>] [\-r <remote>] [\-u] [\-f]\fR" 4
-.IX Item "git subrepo retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f]"
-Retarget a subrepo to a different upstream branch or remote.
+.ie n .IP """git subrepo retarget <subdir>|\-\-all [\-b <branch>] [\-r <remote>] [\-u] [\-f] [\-\-dry\-run]""" 4
+.el .IP "\f(CWgit subrepo retarget <subdir>|\-\-all [\-b <branch>] [\-r <remote>] [\-u] [\-f] [\-\-dry\-run]\fR" 4
+.IX Item "git subrepo retarget <subdir>|--all [-b <branch>] [-r <remote>] [-u] [-f] [--dry-run]"
+Move a shared folder to a different upstream branch or remote. This command
+can merge shared files, create commits in this project, and publish committed
+shared changes to the destination branch. It does not push the project branch.
 .Sp
-Use this when the upstream branch (or remote) has been changed and the local
-subrepo history is not contained in the new upstream. The \f(CW\*(C`retarget\*(C'\fR command
-creates or reuses the \f(CW\*(C`subrepo/<subdir>\*(C'\fR branch, merges in the new
-upstream, and pushes the merged history to the upstream branch.
+In prefixed history, the new upstream must contain the recorded original
+upstream history. Divergent replacement is refused. A new branch can be
+created from the recorded shared history. Tracking settings are committed
+automatically; do not manually edit or commit tracking IDs.
 .Sp
-If merge conflicts occur, resolve them in the worktree and commit the merge,
-then rerun \f(CW\*(C`git subrepo retarget <subdir>\*(C'\fR.
+Preview prefixed retarget with \f(CW\*(C`\-\-dry\-run\*(C'\fR. It checks the destination remote
+and shows the old/new mapping, locally available incoming history, shared-file
+differences, and any existing worktree. It never fetches objects, changes
+refs, commits, or publishes. If destination objects are missing, incoming
+differences are explicitly unknown. The preview does not simulate a merge.
 .Sp
-Use \f(CW\*(C`\-\-branch\*(C'\fR and/or \f(CW\*(C`\-\-remote\*(C'\fR to override the upstream. For \f(CW\*(C`retarget\*(C'\fR,
-those overrides are persisted into \f(CW\*(C`<subdir>/.gitrepo\*(C'\fR by default. You
-may still pass \f(CW\*(C`\-\-update\*(C'\fR explicitly. Commit the \f(CW\*(C`<subdir>/.gitrepo\*(C'\fR
-change before pulling.
+A stale, untouched shared worktree is refreshed from current project changes.
+Worktree-only commits and completed conflict resolutions are preserved. If
+both copies have changed, retarget stops and names both locations. Preserve
+the worktree commits on a separate branch and reconcile the copies before
+retrying; do not delete unknown work or use force to bypass this check. An
+identical, completed retarget makes no new commit.
 .Sp
-The \f(CW\*(C`retarget\*(C'\fR command accepts the \f(CW\*(C`\-\-all\*(C'\fR, \f(CW\*(C`\-\-branch=\*(C'\fR, \f(CW\*(C`\-\-remote=\*(C'\fR, \f(CW\*(C`\-\-update\*(C'\fR and \f(CW\*(C`\-\-force\*(C'\fR options.
+If conflicts occur, resolve and finish the merge or rebase in the printed
+worktree, then rerun the original retarget command with the same remote and
+branch options. Do not substitute a normal subrepo commit.
 .Sp
-For prefixed history, the new upstream must contain the recorded original
-upstream history. Divergent replacement is refused. Successful retargeting
-synchronizes the shared contents and records the new settings in the project.
-A new branch can be created from the recorded shared history. The command
-publishes shared changes to that branch; it does not push parent-only files.
-Its settings are committed automatically in prefixed mode.
-.ie n .IP """git subrepo push <subdir>|\-\-all [<branch>] [\-m msg] [\-\-file=<msg file>] [\-r <remote>] [\-b <branch>] [\-M|\-R] [\-u] [\-f] [\-s] [\-N]""" 4
-.el .IP "\f(CWgit subrepo push <subdir>|\-\-all [<branch>] [\-m msg] [\-\-file=<msg file>] [\-r <remote>] [\-b <branch>] [\-M|\-R] [\-u] [\-f] [\-s] [\-N]\fR" 4
-.IX Item "git subrepo push <subdir>|--all [<branch>] [-m msg] [--file=<msg file>] [-r <remote>] [-b <branch>] [-M|-R] [-u] [-f] [-s] [-N]"
+In legacy history only, retarget also supports an upstream without the old
+shared history. It creates or reuses the shared branch, merges the new
+upstream and pushes it. Commit its changed \f(CW\*(C`.gitrepo\*(C'\fR settings before the
+next pull. Legacy retarget does not support \f(CW\*(C`\-\-dry\-run\*(C'\fR.
+.Sp
+Use \f(CW\*(C`\-\-branch\*(C'\fR and/or \f(CW\*(C`\-\-remote\*(C'\fR to override the upstream. Retarget persists
+those overrides by default; \f(CW\*(C`\-\-update\*(C'\fR may also be supplied explicitly. The
+command accepts \f(CW\*(C`\-\-all\*(C'\fR, \f(CW\*(C`\-\-branch=\*(C'\fR, \f(CW\*(C`\-\-remote=\*(C'\fR, \f(CW\*(C`\-\-update\*(C'\fR, \f(CW\*(C`\-\-force\*(C'\fR,
+and (for prefixed history) \f(CW\*(C`\-\-dry\-run\*(C'\fR.
+.ie n .IP """git subrepo push <subdir>|\-\-all [<branch>] [\-m msg] [\-\-file=<msg file>] [\-r <remote>] [\-b <branch>] [\-M|\-R] [\-u] [\-f] [\-s]""" 4
+.el .IP "\f(CWgit subrepo push <subdir>|\-\-all [<branch>] [\-m msg] [\-\-file=<msg file>] [\-r <remote>] [\-b <branch>] [\-M|\-R] [\-u] [\-f] [\-s]\fR" 4
+.IX Item "git subrepo push <subdir>|--all [<branch>] [-m msg] [--file=<msg file>] [-r <remote>] [-b <branch>] [-M|-R] [-u] [-f] [-s]"
 Push a properly merged subrepo branch back upstream.
 .Sp
 This command takes the subrepo branch from a successful pull command and
@@ -556,7 +581,16 @@ pushed!) Prefixed history refuses force pushes, including under \f(CW\*(C`\-\-al
 and resolve incoming changes first, or use \f(CW\*(C`retarget\*(C'\fR for a supported
 upstream transition.
 .Sp
-The \f(CW\*(C`push\*(C'\fR command accepts the \f(CW\*(C`\-\-all\*(C'\fR, \f(CW\*(C`\-\-branch=\*(C'\fR, \f(CW\*(C`\-\-dry\-run\*(C'\fR, \f(CW\*(C`\-\-file\*(C'\fR, \f(CW\*(C`\-\-force\*(C'\fR, \f(CW\*(C`\-\-merge\*(C'\fR, \f(CW\*(C`\-\-message\*(C'\fR, \f(CW\*(C`\-\-rebase\*(C'\fR, \f(CW\*(C`\-\-remote=\*(C'\fR, \f(CW\*(C`\-\-squash\*(C'\fR and \f(CW\*(C`\-\-update\*(C'\fR options.
+A subrepo push sends shared-directory files, not project-only files. Exported
+commit messages retain the original message, which may mention both kinds of
+files. Publish the project's new tracking commits separately with \f(CW\*(C`git push\*(C'\fR
+when ready. Imported shared commits can make Git's project ahead-count large;
+that count is not the number of unpublished shared edits. Use subrepo status
+for folder-level actions and \f(CW\*(C`git log \-\-first\-parent \-\-oneline\*(C'\fR for project
+integration history.
+.Sp
+The \f(CW\*(C`push\*(C'\fR command accepts the \f(CW\*(C`\-\-all\*(C'\fR, \f(CW\*(C`\-\-branch=\*(C'\fR, \f(CW\*(C`\-\-file\*(C'\fR, \f(CW\*(C`\-\-force\*(C'\fR,
+\&\f(CW\*(C`\-\-merge\*(C'\fR, \f(CW\*(C`\-\-message\*(C'\fR, \f(CW\*(C`\-\-rebase\*(C'\fR, \f(CW\*(C`\-\-remote=\*(C'\fR, \f(CW\*(C`\-\-squash\*(C'\fR and \f(CW\*(C`\-\-update\*(C'\fR options.
 .ie n .IP """git subrepo fetch <subdir>|\-\-force \-\-all [\-r <remote>] [\-b <branch>]""" 4
 .el .IP "\f(CWgit subrepo fetch <subdir>|\-\-force \-\-all [\-r <remote>] [\-b <branch>]\fR" 4
 .IX Item "git subrepo fetch <subdir>|--force --all [-r <remote>] [-b <branch>]"
@@ -602,6 +636,11 @@ and \f(CW\*(C`\-\-message=\*(C'\fR options.
 Get the status of a subrepo. Uses the \f(CW\*(C`\-\-all\*(C'\fR option by default. If the \f(CW\*(C`\-\-quiet\*(C'\fR flag is used, just print the subrepo names, one per line.
 .Sp
 The \f(CW\*(C`\-\-verbose\*(C'\fR option will show all the recent local and upstream commits.
+In prefixed mode it also shows the original and imported tracking IDs.
+Ordinary status is offline: it explicitly says the remote was not checked, and
+incoming information is cached. Use \f(CW\*(C`\-\-fetch\*(C'\fR to check the remote now. A
+later remote update still requires another fetch; status does not continuously
+synchronize projects.
 .Sp
 Use \f(CW\*(C`\-\-ALL\*(C'\fR to show the subrepos of the subrepos (ie the
 \&\*(L"subsubrepos\*(R"), if any.
@@ -702,11 +741,12 @@ commands that \f(CW\*(C`\-\-all\*(C'\fR works for.
 .IX Item "--branch=<branch-name> (-b <branch-name>)"
 Use a different upstream branch-name than the remote \s-1HEAD\s0 or the one saved in
 \&\f(CW\*(C`.gitrepo\*(C'\fR locally.
-.ie n .IP """\-\-dry\-run"" (""\-N"")" 4
-.el .IP "\f(CW\-\-dry\-run\fR (\f(CW\-N\fR)" 4
-.IX Item "--dry-run (-N)"
-For the push command, do everything up until the push and then print out the
-actual \f(CW\*(C`git push\*(C'\fR command needed to finish the operation.
+.ie n .IP """\-\-dry\-run""" 4
+.el .IP "\f(CW\-\-dry\-run\fR" 4
+.IX Item "--dry-run"
+Preview migration or prefixed retarget without changing files, refs, or
+history. Migration is offline; retarget checks the destination with the remote
+but does not fetch or publish. This option is not supported by push.
 .ie n .IP """\-\-edit"" (""\-e"")" 4
 .el .IP "\f(CW\-\-edit\fR (\f(CW\-e\fR)" 4
 .IX Item "--edit (-e)"
