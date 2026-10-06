@@ -373,10 +373,17 @@ Fetch the missing history before importing. No project files were changed."
   fi
   # Let Git walk tree changes once, rather than listing every complete snapshot.
   paths=$history_tmp/rewrite-paths
+  git ls-tree -r -z --name-only "$tip" -- .gitrepo > "$paths"
+  while IFS= read -r -d '' path; do
+    if [[ $path == .gitrepo ]]; then
+      error "The incoming tip contains root tracking metadata (.gitrepo).
+Remove it from the upstream tip before importing. Historical root tracking metadata may remain in earlier commits."
+    fi
+  done < "$paths"
   git log --no-show-signature --format= --name-only -z --no-renames --diff-filter=A \
     --full-history --root -m "$tip" -- ':(glob)**/.gitrepo' > "$paths"
   while IFS= read -r -d '' path; do
-    if [[ $path == .gitrepo || $path == */.gitrepo ]]; then
+    if [[ $path == */.gitrepo ]]; then
       error "The incoming repository contains nested subrepo metadata. Nested prefixed imports are not supported."
     fi
   done < "$paths"

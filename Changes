@@ -9,6 +9,8 @@ version: 0.5.0-dev
   refuse simultaneous edits, support previews, and make completed retargets no-ops.
 - Allow bounded, labelled history with pending worktrees and grouped one-line
   output; batch log metadata reads and clarify remote freshness and publication.
+- Allow historical root .gitrepo files when absent from the incoming tip;
+  preserve their original contents while still refusing genuinely nested subrepos.
 ---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST
