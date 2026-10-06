@@ -1609,7 +1609,11 @@ get-command-options() {
       --diff)
           status_diff_wanted=true
           status_diff_cli=true ;;
-      --history) history_option=$1; shift ;;
+      --history)
+          history_option=$1
+          [[ $history_option == prefixed || $history_option == legacy ]] ||
+            error "Choose --history=prefixed or --history=legacy."
+          shift ;;
       --dry-run) history_dry_run=true ;;
       --accept-repair) history_accept=$1; shift ;;
       --incoming) history_incoming=true ;;
@@ -1657,8 +1661,6 @@ get-command-options() {
   if [[ $history_option ]]; then
     [[ $command =~ ^(clone|init|migrate)$ ]] ||
       usage-error "--history is only for clone, init, or migrate."
-    [[ $history_option == prefixed || $history_option == legacy ]] ||
-      usage-error "Choose --history=prefixed or --history=legacy."
   fi
   ! $history_dry_run || [[ $command =~ ^(migrate|retarget)$ ]] ||
     usage-error "--dry-run is only for migrate or retarget."

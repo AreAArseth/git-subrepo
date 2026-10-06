@@ -16,7 +16,7 @@ git-subrepo - Git Submodule Alternative
 
     git subrepo clone <remote-url> [<subdir>]
     git subrepo init <subdir>
-    git subrepo migrate <subdir>|--all --history=prefixed [--dry-run]
+    git subrepo migrate <subdir>|--all [--history=prefixed] [--dry-run]
     git subrepo pull <subdir>
     git subrepo retarget <subdir>
     git subrepo push <subdir>
