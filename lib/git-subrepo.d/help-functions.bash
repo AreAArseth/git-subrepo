@@ -91,6 +91,9 @@ help:clone() {
   obtained.
 
   The `--force` option will "reclone" (completely replace) an existing subdir.
+  For prefixed history, the repository must match the recorded remote, and an
+  explicit branch must match the recorded branch. Use `git subrepo retarget`
+  with `--remote` or `--branch` to select a different source.
 
   The `--method` option will decide how the join process between branches are
    performed. The default option is merge.
@@ -259,6 +262,8 @@ help:migrate() {
   `--dry-run` explains the change without fetching, creating objects, or modifying
   project files, refs, or tracking metadata. Migration attaches history from the
   recorded upstream commit, not necessarily the remote's latest tip.
+  Previews also check rewrite eligibility, including incomplete history,
+  replacement refs, and unsupported nested metadata.
 
   Use `--all` (`-a`) to check or migrate every subrepo. The preview reports every
   blocked subrepo. Actual bulk migration checks all subrepos before changing any;
@@ -377,6 +382,10 @@ help:push() {
   that count is not the number of unpublished shared edits. Use subrepo status
   for folder-level actions and `git log --first-parent --oneline` for project
   integration history.
+
+  In prefixed mode, `--update` records changed remote or branch settings even when
+  there are no shared files to publish. This creates a project bookkeeping commit,
+  not a remote push. Repeating already recorded settings makes no new commit.
 
   The `push` command accepts the `--all`, `--branch=`, `--file`,
   `--force`, `--merge`, `--message`, `--rebase`, `--remote=`, `--squash` and

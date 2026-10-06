@@ -222,13 +222,18 @@ for rewriting or migration; shallow history is not silently treated as
 complete history.
 
 Operations sharing a parent repository are serialized across its linked
-worktrees. A busy message identifies the owning operation. Finish it before
-retrying rather than deleting its worktree. Unfinished shared-worktree edits
-are preserved. After abrupt termination, retry the same command. The client
-can reclaim its recorded lock after verifying that the same-machine owner
-has exited and Git has released its index lock. It then checks the saved
-update before continuing. If a Git operation is still active, it refuses to
-take over.
+worktrees. Offline status, history browsing, and previews participate too. Read-
+only commands use temporary coordination files, without changing Git objects,
+refs, or indexes. A busy message refuses the competing operation. Finish the
+active operation before retrying rather than deleting its worktree. Unfinished
+shared-worktree edits are preserved. After abrupt termination, retry the same
+command. The client can reclaim its recorded lock after verifying that the same-
+machine owner has exited and Git has released its index lock. It then checks
+the saved update before continuing. If a Git operation is still active, it
+refuses to take over. An incomplete or unverifiable process lock is preserved
+for maintainer inspection. This coordination does not prevent unrelated Git
+commands or older clients from changing the repository; do not run those
+concurrently with shared operations.
 
 If a push succeeds remotely but a local hook or signature fails, the
 diagnostic distinguishes those outcomes. Fix the local failure and retry the
@@ -301,6 +306,9 @@ I<subdir>. From the subdir, all the current information about the subrepo
 can be obtained.
 
 The C<--force> option will "reclone" (completely replace) an existing subdir.
+For prefixed history, the repository must match the recorded remote, and an
+explicit branch must match the recorded branch. Use C<git subrepo retarget>
+with C<--remote> or C<--branch> to select a different source.
 
 The C<--method> option will decide how the join process between branches are
 performed. The default option is merge.
@@ -344,8 +352,9 @@ changes and pull again if needed to finish synchronization.
 
 C<--dry-run> explains the change without fetching, creating objects, or
 modifying project files, refs, or tracking metadata. Migration attaches
-history from the recorded upstream commit, not necessarily the remote's
-latest tip.
+history from the recorded upstream commit, not necessarily the remote's latest
+tip. Previews also check rewrite eligibility, including incomplete history,
+replacement refs, and unsupported nested metadata.
 
 Use C<--all> (C<-a>) to check or migrate every subrepo. The preview reports
 every blocked subrepo. Actual bulk migration checks all subrepos before
@@ -521,6 +530,11 @@ when ready. Imported shared commits can make Git's project ahead-count large;
 that count is not the number of unpublished shared edits. Use subrepo status
 for folder-level actions and C<git log --first-parent --oneline> for project
 integration history.
+
+In prefixed mode, C<--update> records changed remote or branch settings even
+when there are no shared files to publish. This creates a project
+bookkeeping commit, not a remote push. Repeating already recorded settings
+makes no new commit.
 
 The C<push> command accepts the C<--all>, C<--branch=>, C<--file>, C<--force>,
 C<--merge>, C<--message>, C<--rebase>, C<--remote=>, C<--squash> and C<--update> options.

@@ -22,23 +22,77 @@ Then retry the --all operation."
   fi
 }
 
+history:lock-gate() {
+  local gate=$history_common/subrepo-operation.guard
+  local record pid host user index nonce alive=0
+  local entries=()
+  if ! mkdir "$gate" 2>/dev/null; then
+    [[ -d $gate && ! -L $gate ]] ||
+      error "Another shared-repository operation is active or its process lock cannot be inspected. Finish that operation before retrying."
+    entries=("$gate"/*)
+    [[ ${#entries[@]} == 1 && -d ${entries[0]} && ! -L ${entries[0]} ]] ||
+      error "Another shared-repository operation is active. Its process-lock owner could not be read; finish that operation before retrying."
+    nonce=${entries[0]##*/}
+    [[ $nonce =~ ^subrepo-operation\.[a-zA-Z0-9]{8}$ &&
+       -d $history_common/$nonce && ! -L $history_common/$nonce ]] ||
+      error "The operation process lock has an invalid temporary-directory record. Its files were not removed."
+    record=$history_common/$nonce/lease
+    [[ -f $record && ! -L $record ]] ||
+      error "The operation process-lock owner could not be read. Its files were not removed."
+    if ! { pid=$(git config -f "$record" lock.pid) &&
+      host=$(git config -f "$record" lock.host) &&
+      user=$(git config -f "$record" lock.user) &&
+      index=$(git config -f "$record" lock.index) &&
+      [[ $(git config -f "$record" lock.nonce) == "$history_common/$nonce" ]]; }; then
+      error "The operation process lock has an invalid owner record. Its files were not removed."
+    fi
+    [[ $pid =~ ^[1-9][0-9]*$ && $host == "$(hostname)" && $user == "$(id -u)" && $index == /* ]] ||
+      error "Another shared-repository operation is active or has an unknown owner. Finish that operation before retrying."
+    ps -p "$pid" -o pid= > /dev/null 2>&1 || alive=$?
+    [[ $alive == 1 && ! -e $index.lock ]] ||
+      error "Another shared-repository operation is active or still has a Git lock. Finish that operation before retrying."
+    # Only one reclaimer can remove this nonce. Never remove a successor's lock.
+    if ! { rmdir "${entries[0]}" 2>/dev/null && rmdir "$gate" 2>/dev/null &&
+      mkdir "$gate" 2>/dev/null; }; then
+      error "Another shared-repository operation started first, or its process lock needs inspection. Finish that operation before retrying."
+    fi
+    guard_previous_tmp=$history_common/$nonce
+  fi
+  mkdir "$gate/${history_tmp##*/}"
+  HISTORY_CLEANUP_GATE=$gate
+}
+
 history:lock() {
   [[ $command =~ ^(help|version|upgrade)$ ]] && return 0
   history_common=$(git rev-parse --git-common-dir)
-  history_common=$(cd "$history_common" && pwd)
-  if $history_dry_run; then
-    return 0
-  fi
+  history_common=$(cd "$history_common" && pwd -P)
   history_tmp=$(mktemp -d "$history_common/subrepo-operation.XXXXXXXX")
   HISTORY_CLEANUP_COMMON=$history_common
   HISTORY_CLEANUP_TMP=$history_tmp
   HISTORY_CLEANUP_LOCK=
   HISTORY_CLEANUP_LEASE=
+  HISTORY_CLEANUP_GATE=
   trap 'history:release' EXIT
-  if [[ $command =~ ^(status|log)$ ]] && ! $fetch_wanted; then
-    if git rev-parse --verify refs/subrepo-operation-lock > /dev/null 2>&1; then
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  local record=$history_tmp/lease index guard_previous_tmp=''
+  git config -f "$record" lock.pid "$$"
+  git config -f "$record" lock.host "$(hostname)"
+  git config -f "$record" lock.user "$(id -u)"
+  index=$(git rev-parse --git-path index)
+  [[ $index == /* ]] || index=$PWD/$index
+  git config -f "$record" lock.index "$index"
+  git config -f "$record" lock.owner "Process $$: $command in $PWD"
+  git config -f "$record" lock.nonce "$history_tmp"
+  # Readers hold the same object-free gate for their entire operation. Writers
+  # additionally retain the durable Git lease for interrupted-update recovery.
+  history:lock-gate
+  if $history_dry_run || { [[ $command =~ ^(status|log)$ ]] && ! $fetch_wanted; }; then
+    if git rev-parse --verify refs/subrepo-operation-lock > /dev/null 2>&1 ||
+       [[ -e $history_common/subrepo-operation.lock ]]; then
       error "A shared-repository update has not finished. Finish or retry that operation before browsing its state; no project files were changed."
     fi
+    if [[ $guard_previous_tmp ]]; then rm -rf -- "$guard_previous_tmp"; fi
     return 0
   fi
   local lock=$history_common/subrepo-operation.lock previous lease pid host user index owner=''
@@ -50,33 +104,25 @@ history:lock() {
     user=$(git config --blob "$previous" lock.user)
     index=$(git config --blob "$previous" lock.index)
     owner=$(git config --blob "$previous" lock.owner)
-    if [[ ! $pid =~ ^[0-9]+$ || $host != "$(hostname)" || $user != "$(id -u)" ]] ||
+    if [[ ! $pid =~ ^[1-9][0-9]*$ || $host != "$(hostname)" || $user != "$(id -u)" || $index != /* ]] ||
        ps -p "$pid" -o pid= > /dev/null 2>&1 || [[ -e $index.lock ]]; then
       error "Another shared-repository operation is active or still has a Git lock.
 $owner
 Finish that operation before retrying. No project files have been changed."
     fi
     previous_tmp=$(git config --blob "$previous" lock.nonce) || previous_tmp=
-    [[ ${previous_tmp%/*} == "$history_common" &&
-       ${previous_tmp##*/} =~ ^subrepo-operation\.[a-zA-Z0-9]{8}$ &&
-       ! -L $previous_tmp ]] ||
+    [[ ${previous_tmp##*/} =~ ^subrepo-operation\.[a-zA-Z0-9]{8}$ &&
+       ! -L $previous_tmp &&
+       $(cd "${previous_tmp%/*}" 2>/dev/null && pwd -P) == "$history_common" ]] ||
       error "The interrupted operation has an invalid temporary-directory record.
 Its files were not removed. Ask the repository maintainer to inspect refs/subrepo-operation-lock before retrying."
+    previous_tmp=$history_common/${previous_tmp##*/}
   elif [[ -d $lock ]]; then
     [[ ! -f $lock/owner ]] || owner=$(cat "$lock/owner")
     error "Another shared-repository operation is active.
 ${owner:-Its owner could not be read.}
 Finish that operation before retrying. No project files have been changed."
   fi
-  local record=$history_tmp/lease
-  git config -f "$record" lock.pid "$$"
-  git config -f "$record" lock.host "$(hostname)"
-  git config -f "$record" lock.user "$(id -u)"
-  index=$(git rev-parse --git-path index)
-  [[ $index == /* ]] || index=$PWD/$index
-  git config -f "$record" lock.index "$index"
-  git config -f "$record" lock.owner "Process $$: $command in $PWD"
-  git config -f "$record" lock.nonce "$history_tmp"
   lease=$(git hash-object -w "$record")
   # Compare-and-swap prevents two processes from reclaiming a dead owner's lock.
   git update-ref refs/subrepo-operation-lock "$lease" "$previous" 2>/dev/null ||
@@ -88,6 +134,9 @@ Finish that operation before retrying. No project files have been changed."
   if [[ $previous ]]; then
     rm -rf -- "$previous_tmp"
   fi
+  if [[ $guard_previous_tmp && $guard_previous_tmp != "$previous_tmp" ]]; then
+    rm -rf -- "$guard_previous_tmp"
+  fi
   if [[ $previous && -d $lock ]]; then
     rm -f "$lock/owner"
     rmdir "$lock"
@@ -95,8 +144,6 @@ Finish that operation before retrying. No project files have been changed."
   fi
   mkdir "$lock"
   printf 'Process %s: %s in %s\n' "$$" "$command" "$PWD" > "$lock/owner"
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
 }
 
 history:release() {
@@ -104,9 +151,7 @@ history:release() {
   local temp=${history_tmp:-${HISTORY_CLEANUP_TMP:-}}
   local lock=${history_lock:-${HISTORY_CLEANUP_LOCK:-}}
   local lease=${history_lease:-${HISTORY_CLEANUP_LEASE:-}}
-  if [[ $temp == "$common"/subrepo-operation.* && -d $temp ]]; then
-    rm -rf -- "$temp"
-  fi
+  local gate=${HISTORY_CLEANUP_GATE:-}
   if [[ $lease && $(git --git-dir="$common" rev-parse --verify refs/subrepo-operation-lock 2>/dev/null) == "$lease" ]]; then
     if [[ $lock == "$common/subrepo-operation.lock" && -d $lock ]]; then
       rm -f -- "$lock/owner"
@@ -114,7 +159,16 @@ history:release() {
     fi
     git --git-dir="$common" update-ref -d refs/subrepo-operation-lock "$lease"
   fi
+  if [[ $gate == "$common/subrepo-operation.guard" && -d $gate && ! -L $gate ]]; then
+    if ! { rmdir "$gate/${temp##*/}" && rmdir "$gate"; }; then
+      error "The operation process lock could not be released. Its remaining files were preserved for inspection."
+    fi
+  fi
+  if [[ $temp == "$common"/subrepo-operation.* && -d $temp ]]; then
+    rm -rf -- "$temp"
+  fi
   HISTORY_CLEANUP_COMMON='' HISTORY_CLEANUP_TMP='' HISTORY_CLEANUP_LOCK='' HISTORY_CLEANUP_LEASE=''
+  HISTORY_CLEANUP_GATE=''
 }
 
 history:field() {
@@ -352,17 +406,8 @@ history:write-object() {
   git hash-object -t commit -w "$target"
 }
 
-history:rewrite() {
-  set -e
-  local tip=$1 encoded base original mapped tree parent existing originals incremental=false
-  local source_tree source_parents paths path records batch_oid batch_type size
-  local prefix=$subdir name
-  local tree_ids=()
-  local raw=$history_tmp/rewrite-raw target=$history_tmp/rewrite-commit
-  local updates=$history_tmp/rewrite-refs batch=$history_tmp/rewrite-batch
-  encoded=$(history:path-code "$subdir")
-  base=refs/subrepo/$subref/map-1
-  declare -A mapping=() cached=() trees=() processed=()
+history:validate-rewrite() {
+  local tip=$1 paths path
   if [[ $(git rev-parse --is-shallow-repository) == true ]]; then
     error "Complete upstream history is needed for '$subdir/'.
 Fetch the missing history before importing. No project files were changed."
@@ -371,22 +416,38 @@ Fetch the missing history before importing. No project files were changed."
         -s $history_common/info/grafts ]]; then
     error "History replacements are active. Disable them before rewriting shared history."
   fi
-  # Let Git walk tree changes once, rather than listing every complete snapshot.
-  paths=$history_tmp/rewrite-paths
-  git ls-tree -r -z --name-only "$tip" -- .gitrepo > "$paths"
-  while IFS= read -r -d '' path; do
-    if [[ $path == .gitrepo ]]; then
-      error "The incoming tip contains root tracking metadata (.gitrepo).
+  paths=$(git ls-tree -r --name-only "$tip" -- .gitrepo) ||
+    error "The upstream history for '$subdir/' could not be read. Fetch its complete history before retrying."
+  if [[ $paths == .gitrepo ]]; then
+    error "The incoming tip contains root tracking metadata (.gitrepo).
 Remove it from the upstream tip before importing. Historical root tracking metadata may remain in earlier commits."
-    fi
-  done < "$paths"
-  git log --no-show-signature --format= --name-only -z --no-renames --diff-filter=A \
-    --full-history --root -m "$tip" -- ':(glob)**/.gitrepo' > "$paths"
-  while IFS= read -r -d '' path; do
-    if [[ $path == */.gitrepo ]]; then
-      error "The incoming repository contains nested subrepo metadata. Nested prefixed imports are not supported."
-    fi
-  done < "$paths"
+  fi
+  # Stream NUL-delimited paths without scratch files, including during previews.
+  paths=$(
+    set -o pipefail
+    git log --no-show-signature --format= --name-only -z --no-renames --diff-filter=A \
+      --full-history --root -m "$tip" -- ':(glob)**/.gitrepo' |
+      while IFS= read -r -d '' path; do
+        if [[ $path == */.gitrepo ]]; then printf 'nested\n'; fi
+      done
+  ) || error "The upstream history for '$subdir/' could not be read. Fetch its complete history before retrying."
+  if [[ $paths ]]; then
+    error "The incoming repository contains nested subrepo metadata. Nested prefixed imports are not supported."
+  fi
+}
+
+history:rewrite() {
+  set -e
+  local tip=$1 encoded base original mapped tree parent existing originals incremental=false
+  local source_tree source_parents records batch_oid batch_type size
+  local prefix=$subdir name
+  local tree_ids=()
+  local raw=$history_tmp/rewrite-raw target=$history_tmp/rewrite-commit
+  local updates=$history_tmp/rewrite-refs batch=$history_tmp/rewrite-batch
+  history:validate-rewrite "$tip"
+  encoded=$(history:path-code "$subdir")
+  base=refs/subrepo/$subref/map-1
+  declare -A mapping=() cached=() trees=() processed=()
   records=$(git for-each-ref --format='%(refname) %(objectname)' "$base/")
   while read -r original mapped; do
     [[ $original ]] || continue
@@ -914,6 +975,16 @@ Then retry your push."
     fi
     if [[ $history_state == tracking && $remote_tip &&
           $snapshot == "$(git rev-parse "$subrepo_commit^{tree}")" ]]; then
+      if [[ $command == push ]] && $update_wanted &&
+         [[ $subrepo_remote != "$history_recorded_remote" ||
+            $subrepo_branch != "$history_recorded_branch" ]]; then
+        local history_write_parent
+        history_write_parent=$(git rev-parse HEAD)
+        history:integrate "$snapshot" \
+          "${wanted_commit_message:-"Update shared repository settings for '$subdir'"}"
+        OK=false; CODE=-3
+        return
+      fi
       OK=false; CODE=-2; return
     fi
     if [[ $branch ]]; then
@@ -1212,6 +1283,7 @@ No project files were changed."
   say "Existing project commits and content stay unchanged; tracking metadata will be upgraded."
   printf '%s\n' "Collaborators must use a prefixed-history capable git-subrepo client after this commit." >&2
   if $history_dry_run; then
+    history:validate-rewrite "$subrepo_commit"
     say "Preview only: nothing was fetched or changed."
     return
   fi

@@ -11,6 +11,9 @@ version: 0.5.0-dev
   output; batch log metadata reads and clarify remote freshness and publication.
 - Allow historical root .gitrepo files when absent from the incoming tip;
   preserve their original contents while still refusing genuinely nested subrepos.
+- Validate migration eligibility during previews and serialize readers with writers.
+- Reject invalid join methods and mismatched prefixed reclone sources; persist
+  push --update settings without publishing unchanged shared content.
 ---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST

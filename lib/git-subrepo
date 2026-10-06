@@ -369,7 +369,11 @@ command:push() {
     say "Subrepo '$subdir' has no new commits to push."
   elif [[ $CODE -eq -3 ]]; then
     say "Subrepo '$subdir' has no new commits to push."
-    say "Recorded the sync point in '$gitrepo'."
+    if [[ $history_mode == prefixed ]]; then
+      say "Updated shared repository settings in '$gitrepo'."
+    else
+      say "Recorded the sync point in '$gitrepo'."
+    fi
   elif [[ $CODE -eq 1 ]]; then
     error-join
     return "$CODE"
@@ -1575,6 +1579,8 @@ get-command-options() {
           wanted_commit_message=$1
           shift;;
       -M) join_method=$1
+          [[ $join_method == merge || $join_method == rebase ]] ||
+            error "The --method option must be merge or rebase."
           shift;;
       -r) subrepo_remote=$1
           override_remote=$1
@@ -1770,7 +1776,14 @@ command-setup() {
     read-gitrepo-file
   elif [[ -f $gitrepo ]]; then
     if git config --file="$gitrepo" --get-regexp '^subrepo-v2\.' > /dev/null; then
+      local requested_remote=$subrepo_remote
       read-gitrepo-file
+      if [[ $command == clone &&
+            ( $requested_remote != "$history_recorded_remote" ||
+              $subrepo_branch != "$history_recorded_branch" ) ]]; then
+        error "Changing the remote or branch of '$subdir/' requires 'git subrepo retarget $(printf '%q' "$subdir")' with --remote or --branch, not clone --force.
+No files or refs were changed."
+      fi
     fi
     [[ ! $history_option || $history_option == "$history_mode" ]] ||
       error "Changing history for '$subdir/' requires 'git subrepo migrate $subdir', not replacement."
@@ -2171,11 +2184,16 @@ assert-working-copy-is-clean() {
     pwd=$(pwd)
     o "Assert that working copy is clean: $pwd"
     if $history_dry_run; then
-      # Compare contents despite stale stat data, without refreshing the index.
-      git -c diff.autoRefreshIndex=false diff --quiet --ignore-submodules ||
-        error "Can't $command subrepo. Unstaged changes. ($pwd)"
       git diff-index --quiet --cached --ignore-submodules HEAD ||
         error "Can't $command subrepo. Index has changes. ($pwd)"
+      # Status refreshes stale stat data in memory; optional locks control
+      # whether that refreshed index is written, including on older Git.
+      local changes
+      changes=$(git --no-optional-locks status --porcelain --untracked-files=no \
+        --ignore-submodules) ||
+        error "Can't $command subrepo. Unable to inspect working tree. ($pwd)"
+      [[ -z $changes ]] ||
+        error "Can't $command subrepo. Unstaged changes. ($pwd)"
       return
     fi
     git update-index -q --ignore-submodules --refresh
