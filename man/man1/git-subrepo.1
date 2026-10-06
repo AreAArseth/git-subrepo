@@ -295,11 +295,17 @@ operation finishes. A busy message refuses the competing operation. Finish the
 active operation before retrying rather than deleting its worktree. Unfinished
 shared-worktree edits are preserved. After abrupt termination, retry the same
 command. The client can reclaim its recorded lock after verifying that the same\-
-machine owner has exited and Git has released its index lock. It then checks
-the saved update before continuing. If a Git operation is still active, it
-refuses to take over. An incomplete or unverifiable process lock is preserved
-for maintainer inspection. This coordination does not prevent unrelated Git
-commands or older clients from changing the repository; do not run those
+machine owner has exited, Git has released its index lock, and its Git child
+processes have finished. An inherited file descriptor tracks those processes
+even if the operation shell is killed. Normal cleanup also waits for them
+before releasing the lock. It then checks the saved update before continuing.
+If a Git operation is still active, it refuses to take over. An incomplete or
+unverifiable process lock is preserved for maintainer inspection. This
+includes interrupted older-client locks without an \s-1EOF\s0 receipt, or a lost
+lifetime observer. Hooks and transport wrappers must preserve inherited file
+descriptor 19 while doing operation-related work; deliberately detached work
+that closes it is not tracked. This coordination does not prevent unrelated
+Git commands or older clients from changing the repository; do not run those
 concurrently with shared operations.
 .PP
 If a push succeeds remotely but a local hook or signature fails, the
@@ -310,7 +316,11 @@ Retry on the same project branch; differing staged, untracked, ignored, or worki
 file edits are preserved rather than overwritten. Fix the reported hook or
 signing failure before retrying. Retrying an interrupted \f(CW\*(C`\-\-all\*(C'\fR integration
 continues the remaining directories without repeating the integrations already
-completed in that request.
+completed in that request. Retarget keeps its completed import recorded until
+publication finishes, so an exact retry does not import the same changes
+twice. New incoming changes still need integration. If the parent or shared
+worktree has changed since interruption, the retry preserves that work and
+stops rather than discarding it.
 .SS "Tracking and Signatures"
 .IX Subsection "Tracking and Signatures"
 The complete \f(CW\*(C`[subrepo\-v2]\*(C'\fR section records metadata format 2, rewrite format

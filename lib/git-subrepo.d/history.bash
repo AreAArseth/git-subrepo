@@ -22,6 +22,39 @@ Then retry the --all operation."
   fi
 }
 
+history:lifetime-start() {
+  # FD 19 is inherited by Git and its transports/hooks. Unlike a PID check,
+  # EOF includes descendants left behind when the operation shell is killed.
+  # Publish no gate until both ends are open. A missing EOF receipt (including
+  # a killed observer) always fails closed; observer death is not proof of EOF.
+  mkfifo "$history_tmp/lifetime"
+  exec 19<>"$history_tmp/lifetime"
+  (
+    trap - EXIT
+    trap '' INT TERM HUP
+    exec 19>&-
+    while IFS= read -r ignored; do :; done
+    if [[ -f $history_tmp/release ]]; then
+      local history_lease='' history_lock=''
+      IFS= read -r history_lease < "$history_tmp/release" || true
+      if [[ $history_lease ]]; then history_lock=$history_common/subrepo-operation.lock; fi
+      if [[ -d $history_common/subrepo-operation.guard/${history_tmp##*/} ]]; then
+        HISTORY_CLEANUP_GATE=$history_common/subrepo-operation.guard
+      fi
+      history:release-files
+    else
+      : > "$history_tmp/lifetime-ended"
+    fi
+  ) < "$history_tmp/lifetime" &
+  HISTORY_LIFETIME_PID=$!
+  HISTORY_LIFETIME_OPEN=true
+}
+
+history:lifetime-ended() {
+  [[ -d $1 && ! -L $1 &&
+     -f $1/lifetime-ended && ! -L $1/lifetime-ended ]]
+}
+
 history:lock-gate() {
   local gate=$history_common/subrepo-operation.guard
   local record pid host user index nonce alive=0
@@ -49,8 +82,11 @@ history:lock-gate() {
     [[ $pid =~ ^[1-9][0-9]*$ && $host == "$(hostname)" && $user == "$(id -u)" && $index == /* ]] ||
       error "Another shared-repository operation is active or has an unknown owner. Finish that operation before retrying."
     ps -p "$pid" -o pid= > /dev/null 2>&1 || alive=$?
-    [[ $alive == 1 && ! -e $index.lock ]] ||
-      error "Another shared-repository operation is active or still has a Git lock. Finish that operation before retrying."
+    if ! { [[ $alive == 1 && ! -e $index.lock ]] &&
+      [[ $(git config -f "$record" lock.lifetime) == fifo-v1 ]] &&
+      history:lifetime-ended "$history_common/$nonce"; }; then
+      error "Another shared-repository operation is active, still has a Git lock, or its descendant lifetime cannot be verified. Finish that operation before retrying."
+    fi
     # Only one reclaimer can remove this nonce. Never remove a successor's lock.
     if ! { rmdir "${entries[0]}" 2>/dev/null && rmdir "$gate" 2>/dev/null &&
       mkdir "$gate" 2>/dev/null; }; then
@@ -72,9 +108,12 @@ history:lock() {
   HISTORY_CLEANUP_LOCK=
   HISTORY_CLEANUP_LEASE=
   HISTORY_CLEANUP_GATE=
+  HISTORY_LIFETIME_OPEN=false
+  HISTORY_LIFETIME_PID=
   trap 'history:release' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  history:lifetime-start
   local record=$history_tmp/lease index guard_previous_tmp=''
   git config -f "$record" lock.pid "$$"
   git config -f "$record" lock.host "$(hostname)"
@@ -84,6 +123,7 @@ history:lock() {
   git config -f "$record" lock.index "$index"
   git config -f "$record" lock.owner "Process $$: $command in $PWD"
   git config -f "$record" lock.nonce "$history_tmp"
+  git config -f "$record" lock.lifetime fifo-v1
   # Readers hold the same object-free gate for their entire operation. Writers
   # additionally retain the durable Git lease for interrupted-update recovery.
   history:lock-gate
@@ -95,7 +135,7 @@ history:lock() {
     if [[ $guard_previous_tmp ]]; then rm -rf -- "$guard_previous_tmp"; fi
     return 0
   fi
-  local lock=$history_common/subrepo-operation.lock previous lease pid host user index owner=''
+  local lock=$history_common/subrepo-operation.lock previous lease pid host user index alive=0 owner=''
   local previous_tmp=''
   previous=$(git rev-parse --verify refs/subrepo-operation-lock 2>/dev/null) || previous=
   if [[ $previous ]]; then
@@ -104,8 +144,12 @@ history:lock() {
     user=$(git config --blob "$previous" lock.user)
     index=$(git config --blob "$previous" lock.index)
     owner=$(git config --blob "$previous" lock.owner)
-    if [[ ! $pid =~ ^[1-9][0-9]*$ || $host != "$(hostname)" || $user != "$(id -u)" || $index != /* ]] ||
-       ps -p "$pid" -o pid= > /dev/null 2>&1 || [[ -e $index.lock ]]; then
+    alive=2
+    if [[ $pid =~ ^[1-9][0-9]*$ && $host == "$(hostname)" && $user == "$(id -u)" && $index == /* ]]; then
+      alive=0
+      ps -p "$pid" -o pid= > /dev/null 2>&1 || alive=$?
+    fi
+    if [[ $alive != 1 || -e $index.lock ]]; then
       error "Another shared-repository operation is active or still has a Git lock.
 $owner
 Finish that operation before retrying. No project files have been changed."
@@ -117,6 +161,10 @@ Finish that operation before retrying. No project files have been changed."
       error "The interrupted operation has an invalid temporary-directory record.
 Its files were not removed. Ask the repository maintainer to inspect refs/subrepo-operation-lock before retrying."
     previous_tmp=$history_common/${previous_tmp##*/}
+    if ! { [[ $(git config --blob "$previous" lock.lifetime) == fifo-v1 ]] &&
+      history:lifetime-ended "$previous_tmp"; }; then
+      error "Another shared-repository operation is active or its descendant lifetime cannot be verified. Its files were not removed."
+    fi
   elif [[ -d $lock ]]; then
     [[ ! -f $lock/owner ]] || owner=$(cat "$lock/owner")
     error "Another shared-repository operation is active.
@@ -147,17 +195,44 @@ Finish that operation before retrying. No project files have been changed."
 }
 
 history:release() {
+  [[ ${HISTORY_LIFETIME_OPEN:-false} == true ]] || return 0
+  local temp=${history_tmp:-${HISTORY_CLEANUP_TMP:-}}
+  local lease=${history_lease:-${HISTORY_CLEANUP_LEASE:-}}
+  # Request cleanup before closing our writer. Only the EOF observer may remove
+  # locks: Git children can still be running even on a normal shell exit.
+  printf '%s\n' "$lease" > "$temp/release-next"
+  mv -- "$temp/release-next" "$temp/release"
+  exec 19>&-
+  HISTORY_LIFETIME_OPEN=false
+  wait "$HISTORY_LIFETIME_PID" ||
+    error "The operation lifetime observer failed. Its remaining locks and files were preserved for inspection."
+  HISTORY_CLEANUP_COMMON='' HISTORY_CLEANUP_TMP='' HISTORY_CLEANUP_LOCK='' HISTORY_CLEANUP_LEASE=''
+  HISTORY_CLEANUP_GATE=''
+}
+
+history:release-files() {
   local common=${history_common:-${HISTORY_CLEANUP_COMMON:-}}
   local temp=${history_tmp:-${HISTORY_CLEANUP_TMP:-}}
   local lock=${history_lock:-${HISTORY_CLEANUP_LOCK:-}}
   local lease=${history_lease:-${HISTORY_CLEANUP_LEASE:-}}
   local gate=${HISTORY_CLEANUP_GATE:-}
-  if [[ $lease && $(git --git-dir="$common" rev-parse --verify refs/subrepo-operation-lock 2>/dev/null) == "$lease" ]]; then
-    if [[ $lock == "$common/subrepo-operation.lock" && -d $lock ]]; then
-      rm -f -- "$lock/owner"
-      rmdir "$lock"
-    fi
-    git --git-dir="$common" update-ref -d refs/subrepo-operation-lock "$lease"
+  if [[ $lease ]]; then
+    # Lease deletion can itself invoke Git hooks. Keep the gate until those
+    # descendants finish too, even if the original shell dies during cleanup.
+    exec 19<>"$temp/lifetime"
+    (
+      if [[ $(git --git-dir="$common" rev-parse --verify refs/subrepo-operation-lock 2>/dev/null) == "$lease" ]]; then
+        if [[ $lock == "$common/subrepo-operation.lock" && -d $lock ]]; then
+          rm -f -- "$lock/owner"
+          rmdir "$lock"
+        fi
+        git --git-dir="$common" update-ref -d refs/subrepo-operation-lock "$lease"
+      fi
+    ) &
+    local cleanup_pid=$!
+    exec 19>&-
+    while IFS= read -r ignored; do :; done
+    wait "$cleanup_pid" || return $?
   fi
   if [[ $gate == "$common/subrepo-operation.guard" && -d $gate && ! -L $gate ]]; then
     if ! { rmdir "$gate/${temp##*/}" && rmdir "$gate"; }; then
@@ -585,6 +660,10 @@ history:integrate() {
   git config -f "$prepared" operation.directory "$subdir"
   git config -f "$prepared" operation.request "$(history:invocation)"
   git config -f "$prepared" operation.phase "${history_phase:-complete}"
+  if [[ ${history_phase:-} == retarget-import ]]; then
+    git config -f "$prepared" operation.worktreeTip \
+      "$(git -C "$history_common/tmp/subrepo/$subref" rev-parse HEAD)"
+  fi
   if [[ $commit_msg_file ]]; then
     cp "$commit_msg_file" "$journal.message"
   else
@@ -622,7 +701,10 @@ Review 'git status' and preserve that work before retrying."
   subrepo_parent=${history_write_parent:-$subrepo_parent}
   subrepo_commit=$upstream_head_commit
   rm -f "$index"
-  rm -f "$journal" "$journal.message"
+  # Retarget still owes publication even when this import commit succeeded.
+  if [[ ${history_phase:-} != retarget-import ]]; then
+    rm -f "$journal" "$journal.message"
+  fi
 }
 
 history:resume-integration() {
@@ -650,7 +732,7 @@ Your files were kept. Return to that branch before retrying the saved command."
   local subdir=$directory subref history_mode=prefixed pending remote remote_branch remote_tip
   encode-subdir
   pending=$history_common/subrepo-pending/$subref/push
-  if [[ -f $pending ]]; then
+  if [[ -f $pending && $(git config -f "$journal" operation.phase) != retarget-import ]]; then
     remote=$(git config -f "$pending" push.remote)
     remote_branch=$(git config -f "$pending" push.remoteBranch)
     remote_tip=$(git ls-remote "$remote" "refs/heads/$remote_branch") ||
@@ -700,6 +782,26 @@ history:finish-resumed() {
   local history_mode=prefixed
   phase=$(git config -f "$journal" operation.phase)
   encode-subdir
+  if [[ $phase == retarget-import ]]; then
+    local path=$history_common/tmp/subrepo/$subref tip
+    if [[ -d $path ]]; then
+      tip=$(git config -f "$journal" operation.worktreeTip) || tip=
+      if [[ $tip ]]; then
+        [[ $(git -C "$path" rev-parse HEAD) == "$tip" ]] ||
+          error "The shared worktree changed after the interrupted import. Its commits and recovery record were kept; preserve that work before retrying."
+      else
+        [[ $(git -C "$path" rev-parse 'HEAD^{tree}') == "$(history:tree HEAD)" ]] ||
+          error "The shared worktree differs from the interrupted import. Its files and recovery record were kept; preserve that work before retrying."
+      fi
+    fi
+    history:remove-worktree
+    history_retarget_ready=$subdir
+    if $all_wanted; then
+      history_resume_after=$subdir
+      history_resume_current=true
+    fi
+    return
+  fi
   if [[ $phase != repair ]]; then
     history:remove-worktree
     pending=$history_common/subrepo-pending/$subref/push
@@ -713,12 +815,8 @@ history:finish-resumed() {
       say "Shared changes were already sent upstream. Completed the local record."
     fi
   fi
-  if [[ $phase == retarget-import ]]; then
-    history_retarget_ready=$subdir
-  fi
   if $all_wanted && [[ $phase != repair ]]; then
     history_resume_after=$subdir
-    [[ $phase != retarget-import ]] || history_resume_current=true
   elif [[ $phase == complete ]]; then
     history_finished_request=true
   fi
@@ -1054,10 +1152,8 @@ Then retry your push."
 
 history:retarget() {
   local remote_tip branch='' snapshot target=subrepo/$subref
-  if [[ $history_retarget_ready == "$subdir" ]]; then
-    history_retarget_ready=
-    history:push
-    OK=true
+  if [[ -f $history_common/subrepo-pending/$subref/push ]]; then
+    history:publish-retarget
     return
   fi
   remote_tip=$(git ls-remote "$subrepo_remote" "refs/heads/$subrepo_branch") ||
@@ -1066,6 +1162,17 @@ history:retarget() {
   if [[ $remote_tip ]]; then
     subrepo:fetch
     remote_tip=$upstream_head_commit
+  fi
+  if [[ $history_retarget_ready == "$subdir" ]]; then
+    history_retarget_ready=
+    if [[ ! $remote_tip || $remote_tip == "$subrepo_commit" ]]; then
+      history:publish-retarget
+      return
+    fi
+    # New incoming history needs a new import, not a replay of the saved one.
+    local journal
+    journal=$(git rev-parse --git-path subrepo-integration)
+    rm -f "$journal" "$journal.message"
   fi
   worktree=$history_common/tmp/$target
   snapshot=$(history:tree HEAD)
@@ -1094,8 +1201,7 @@ Fetch the previously tracked branch before retrying; nothing was pushed."
       history:commit
       history_phase=complete
     fi
-    history:push
-    OK=true
+    history:publish-retarget
     return
   fi
   if [[ ! -d $worktree ]]; then
@@ -1111,7 +1217,15 @@ Fetch the previously tracked branch before retrying; nothing was pushed."
   local history_phase=retarget-import
   history:commit
   history_phase=complete
+  history:publish-retarget
+}
+
+history:publish-retarget() {
   history:push
+  # A no-op push creates no integration of its own to clear the import journal.
+  local journal
+  journal=$(git rev-parse --git-path subrepo-integration)
+  rm -f "$journal" "$journal.message"
   OK=true
 }
 

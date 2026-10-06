@@ -33,6 +33,13 @@ without requiring users to choose hashes or edit tracking files.
 alone never prove equivalence. Incoming history uses explicitly fetched original
 objects. Linked parent worktrees serialize operations, with ownership checks and
 journaled recovery after interruption or remote-success/local-failure.
+Retarget retains its import journal through publication: an exact retry of an
+already committed import publishes without importing it again, including when a
+prepared push has not reached the remote yet. Recovery checks the saved request,
+parent branch, commit tree and parents, and any remaining shared worktree tip.
+Changed parent or worktree state is preserved and refused rather than silently
+discarded. New destination commits still require integration; a no-op publication
+clears the completed import journal without creating another project commit.
 
 Initial scope excludes unborn parent repositories, nested prefixed subrepos,
 directory moves, force pushes, and automatic divergent-upstream recovery.
