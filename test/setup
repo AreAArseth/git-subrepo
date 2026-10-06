@@ -30,6 +30,9 @@ setup_git_config() {
   git config --global core.bare false
   git config --global core.logallrefupdates true
   git config --global core.repositoryformatversion 0
+  # Background maintenance can race object snapshots and fixture cleanup.
+  git config --global gc.auto 0
+  git config --global maintenance.auto false
 
   # Disable interactive prompts
   git config --global advice.detachedHead false

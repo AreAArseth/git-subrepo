@@ -1297,7 +1297,29 @@ No project files were changed."
   say "Migrated '$subdir/'. No changes were pushed to a remote."
 }
 
+history:read-objects() {
+  local objects
+  objects=$(git rev-parse --git-path objects)
+  objects=$(cd "$objects" && pwd -P)
+  # Rendering and equivalence need real projected objects, but must not publish
+  # them. Keep this scope below fetch and let the operation lock own cleanup.
+  # C-quote the alternate so colons, quotes and backslashes in paths are safe.
+  objects=${objects//\\/\\\\}
+  objects=${objects//\"/\\\"}
+  objects=${objects//$'\n'/\\n}
+  objects=${objects//$'\r'/\\r}
+  objects=${objects//$'\t'/\\t}
+  local -x GIT_ALTERNATE_OBJECT_DIRECTORIES="\"$objects\"${GIT_ALTERNATE_OBJECT_DIRECTORIES:+:$GIT_ALTERNATE_OBJECT_DIRECTORIES}"
+  local -x GIT_OBJECT_DIRECTORY=$history_tmp/read-objects
+  mkdir -p "$GIT_OBJECT_DIRECTORY"
+  "$@"
+}
+
 history:status() {
+  history:read-objects history:status-render
+}
+
+history:status-render() {
   if $quiet_wanted; then printf '%s\n' "$subdir"; return; fi
   printf "Git subrepo '%s':\n" "$subdir"
   if [[ -f $(git rev-parse --git-path subrepo-integration) ]]; then
@@ -1337,20 +1359,7 @@ history:status() {
   if [[ $history_state == tracking ]] && ! history:needs-repair &&
      git cat-file -e "$subrepo_commit^{commit}" 2>/dev/null &&
      { $status_log_wanted || $status_diff_wanted || $verbose_wanted; }; then
-    local candidate objects commits=()
-    objects=$(git rev-parse --git-path objects)
-    objects=$(cd "$objects" && pwd -P)
-    # Export needs real projected objects for accurate log and diff output, but
-    # inspection must not publish them into the repository's object store.
-    # C-quote the alternate so colons, quotes and backslashes in paths are safe.
-    objects=${objects//\\/\\\\}
-    objects=${objects//\"/\\\"}
-    objects=${objects//$'\n'/\\n}
-    objects=${objects//$'\r'/\\r}
-    objects=${objects//$'\t'/\\t}
-    local -x GIT_ALTERNATE_OBJECT_DIRECTORIES="\"$objects\"${GIT_ALTERNATE_OBJECT_DIRECTORIES:+:$GIT_ALTERNATE_OBJECT_DIRECTORIES}"
-    local -x GIT_OBJECT_DIRECTORY=$history_tmp/status-objects
-    mkdir -p "$GIT_OBJECT_DIRECTORY"
+    local candidate commits=()
     candidate=$(history:export)
     if [[ $candidate != "$subrepo_commit" ]]; then
       if $status_log_wanted || $verbose_wanted; then
@@ -1471,6 +1480,10 @@ command:log() {
     git log "${format[@]}" "${history_log_args[@]}" "${revisions[@]}" "${paths[@]}"
     return
   fi
+  history:read-objects history:log-render
+}
+
+history:log-render() {
   local commits line metadata=$history_tmp/log-metadata
   commits=$(git rev-list --topo-order "${selection[@]}" "${revisions[@]}" "${paths[@]}")
   [[ $commits ]] || return 0

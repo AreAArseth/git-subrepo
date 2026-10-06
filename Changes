@@ -16,6 +16,8 @@ version: 0.5.0-dev
   push --update settings without publishing unchanged shared content.
 - Preserve hook environment markers when retrying interrupted integrations;
   keep detailed status projections out of the repository object database.
+- Keep grouped history projections read-only, including in fresh clones;
+  replace committed shared-file edits when explicitly recloning with --force.
 ---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST

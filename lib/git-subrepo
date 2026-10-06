@@ -695,8 +695,13 @@ subrepo:clone() {
     fi
     o "Check if we already are up to date."
     if [[ $upstream_head_commit == "$subrepo_commit" ]]; then
-      reclone_up_to_date=true
-      return
+      # Prefixed reclones also replace committed edits and reconnect lost history.
+      if [[ $history_mode != prefixed ]] ||
+         { ! history:needs-repair &&
+           [[ $(history:tree HEAD) == "$(git rev-parse "$upstream_head_commit^{tree}")" ]]; }; then
+        reclone_up_to_date=true
+        return
+      fi
     fi
     if [[ $history_mode != prefixed ]]; then
       o "Remove the old subdir."
