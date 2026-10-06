@@ -29,7 +29,7 @@ for command in migrate retarget; do
         cp "$repo/.git/index.lock" "$TMP/lock-before"
       fi
       status=0
-      (cd "$repo" && git subrepo "${args[@]}") > "$TMP/preview" 2>&1 || status=$?
+      (cd "$repo" && GIT_OPTIONAL_LOCKS=1 git subrepo "${args[@]}") > "$TMP/preview" 2>&1 || status=$?
       label="$command preview, $changes, locked=$locked"
       if [[ $changes == clean ]]; then
         is "$status" 0 "$label succeeds with stale index stat data"
@@ -49,7 +49,82 @@ for command in migrate retarget; do
         ok "$(cmp -s "$repo/.git/index.lock" "$TMP/lock-before"; echo $?)" "$label preserves the existing lock"
         rm "$repo/.git/index.lock"
       else
-        ok "$([[ ! -e "$repo/.git/index.lock" ]]; echo $?)" "$label leaves no index lock"
+        present=0
+        [[ ! -e "$repo/.git/index.lock" ]] || present=1
+        is "$present" 0 "$label leaves no index lock"
+      fi
+    done
+  done
+done
+
+repo=$OWNER/preview-shared-worktree
+remote=$UPSTREAM/preview-shared-worktree
+echo 'Unchanged shared file' > "$OWNER/bar/Stable"
+git -C "$OWNER/bar" add Stable
+git -C "$OWNER/bar" commit -qm 'Add stable fixture file'
+git clone -q "$UPSTREAM/foo" "$repo"
+git clone -q --bare "$OWNER/bar" "$remote"
+(
+  cd "$repo"
+  git subrepo clone "$remote" shared
+  git subrepo branch shared
+) > /dev/null
+repo=$(cd "$repo" && pwd -P)
+worktree=$repo/.git/tmp/subrepo/shared
+shared_index=$(git -C "$worktree" rev-parse --git-path index)
+[[ $shared_index == /* ]] || shared_index=$worktree/$shared_index
+
+for command in retarget migrate; do
+  args=("$command" shared --dry-run)
+  [[ $command != retarget ]] || args+=(-b target)
+  for changes in clean unstaged staged; do
+    for locked in false true; do
+      git -C "$worktree" reset --hard -q HEAD
+      if [[ $changes != clean ]]; then
+        echo 'Shared worktree change' >> "$worktree/Bar"
+        [[ $changes != staged ]] || git -C "$worktree" add Bar
+      fi
+      # Include an unchanged stale entry even when Bar has staged/unstaged work.
+      touch -t 200001010000 "$repo/shared/Stable" "$worktree/Stable" "$worktree/Bar"
+      if $locked; then
+        printf 'Existing parent index lock\n' > "$repo/.git/index.lock"
+        printf 'Existing shared index lock\n' > "$shared_index.lock"
+      fi
+      cp -R "$repo" "$TMP/project-before"
+      cp -R "$remote" "$TMP/remote-before"
+      status=0
+      (cd "$repo" && GIT_OPTIONAL_LOCKS=1 git subrepo "${args[@]}") > "$TMP/preview" 2>&1 || status=$?
+      output=$(cat "$TMP/preview")
+      label="$command preview, shared $changes, locked=$locked"
+      if [[ $command == retarget ]]; then
+        is "$status" 0 "$label succeeds"
+        like "$output" 'Preview only: the remote was checked' "$label reports preview"
+        worktree_status=$(sed -n '/Uncommitted work there/,/Worktree\/project file differences/{ /Uncommitted work there/d; /Worktree\/project file differences/d; p; }' "$TMP/preview")
+      else
+        is "$status" 1 "$label refuses an existing shared operation"
+        like "$output" 'Finish the existing shared operation there before retrying' "$label explains refusal"
+        worktree_status=$(sed -n '/Shared worktree:/,/Finish the existing shared operation/{ /Shared worktree:/d; /Finish the existing shared operation/d; p; }' "$TMP/preview")
+      fi
+      case "$changes" in
+        clean)
+          expected=''
+          [[ $command != migrate ]] || expected='No uncommitted files; committed work may still need preserving.'
+          ;;
+        unstaged) expected=' M Bar' ;;
+        staged) expected='M  Bar' ;;
+      esac
+      is "$worktree_status" "$expected" "$label reports exact shared cleanliness"
+      ok "$(cmp -s "$repo/.git/index" "$TMP/project-before/.git/index"; echo $?)" \
+        "$label preserves exact parent index bytes"
+      ok "$(cmp -s "$shared_index" "$TMP/project-before/${shared_index#"$repo/"}"; echo $?)" \
+        "$label preserves exact shared index bytes"
+      ok "$(diff -r "$repo" "$TMP/project-before" > "$TMP/project-diff"; echo $?)" \
+        "$label preserves all parent/shared files, objects, refs and locks"
+      ok "$(diff -r "$remote" "$TMP/remote-before" > "$TMP/remote-diff"; echo $?)" \
+        "$label preserves all destination files, objects and refs"
+      rm -rf "$TMP/project-before" "$TMP/remote-before"
+      if $locked; then
+        rm "$repo/.git/index.lock" "$shared_index.lock"
       fi
     done
   done

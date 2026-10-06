@@ -1258,7 +1258,7 @@ history:preview-retarget() {
   if [[ -d $path ]]; then
     printf '  Existing shared worktree: %s\n' "$path"
     printf '  Uncommitted work there (empty output means clean):\n'
-    git -C "$path" status --short
+    git --no-optional-locks -C "$path" status --short
     printf '  Worktree/project file differences:\n'
     git diff --stat "$(git -C "$path" rev-parse HEAD)" "HEAD:$subdir" -- . ':(exclude).gitrepo'
   fi
@@ -1370,6 +1370,10 @@ Synchronize the blocked subrepos, then rerun 'git subrepo migrate --all --dry-ru
 }
 
 command:migrate() {
+  if $history_dry_run; then
+    # Setup may inspect an existing shared worktree before refusing migration.
+    local -x GIT_OPTIONAL_LOCKS=0
+  fi
   command-setup +subdir
   [[ ${history_option:-prefixed} == prefixed ]] ||
     error "Removing published imported history is not supported. Existing history was not changed."
