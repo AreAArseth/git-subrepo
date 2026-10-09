@@ -860,19 +860,25 @@ history:finish-resumed() {
 }
 
 history:commit() {
+  history:assert-worktree-clean
   git cat-file -e "$subrepo_commit_ref^{commit}" 2>/dev/null ||
     error "The shared branch '$subrepo_commit_ref' is missing. Run 'git subrepo branch $subdir -F' first."
   git merge-base --is-ancestor "$upstream_head_commit" "$subrepo_commit_ref" ||
     error "The shared branch does not contain the fetched upstream changes. Merge them in its worktree before committing."
   history_state=tracking
   history_mapped=$(history:rewrite "$upstream_head_commit")
-  local snapshot message history_write_parent=$subrepo_parent
+  local snapshot message integrated=$history_mapped history_write_parent=$subrepo_parent
   snapshot=$(git rev-parse "$subrepo_commit_ref^{tree}")
+  if [[ $join_method == rebase ]]; then
+    # Keep the resolved replay, not just its tree: a later rebase must not
+    # reconstruct the superseded edits from the project's first-parent chain.
+    integrated=$(history:rewrite "$(git rev-parse "$subrepo_commit_ref")")
+  fi
   if [[ $snapshot == "$(git rev-parse "$upstream_head_commit^{tree}")" || ! $history_write_parent ]]; then
     history_write_parent=$(git rev-parse HEAD)
   fi
   message=${wanted_commit_message:-$(get-commit-message)}
-  history:integrate "$snapshot" "$message" "$history_mapped"
+  history:integrate "$snapshot" "$message" "$integrated"
   history:remove-worktree
   git:make-ref "$refs_subrepo_commit" "$subrepo_commit_ref"
 }
@@ -906,9 +912,48 @@ history:historical-base() {
   fi
 }
 
+history:restore-replay() {
+  set -e
+  local tip=$1 base=$2 mapped_base=$3 encoded=$4 commits source original parent tree record
+  declare -A restored=()
+  if [[ $(history:header "$mapped_base" git-subrepo-rewrite) != "1 $base $encoded" ]] ||
+     ! git merge-base --is-ancestor "$mapped_base" "$tip"; then
+    error "The recorded replay for '$subdir/' does not contain its upstream history. No changes were published."
+  fi
+  commits=$(git rev-list --reverse --topo-order --boundary "$tip" "^$mapped_base")
+  # Boundary parents are fetched originals, including signed upstream commits.
+  # Only the unpublished prefixed descendants need their layout restored.
+  for source in $commits; do
+    [[ $source == -* ]] || continue
+    source=${source#-}
+    record=$(history:header "$source" git-subrepo-rewrite)
+    [[ $record == "1 "*" $encoded" ]] ||
+      error "The recorded replay for '$subdir/' has invalid upstream provenance."
+    original=${record#1 }; original=${original% "$encoded"}
+    git merge-base --is-ancestor "$original" "$base" &&
+      [[ $(git rev-parse "$source:$subdir") == "$(git rev-parse "$original^{tree}")" ]] ||
+      error "The recorded replay for '$subdir/' has an inconsistent upstream boundary."
+    restored[$source]=$original
+  done
+  for source in $commits; do
+    [[ $source != -* ]] || continue
+    [[ $(history:header "$source" git-subrepo-rewrite) == "1 "*" $encoded" ]] ||
+      error "The recorded replay for '$subdir/' contains non-prefixed history."
+    local parents=()
+    for parent in $(git show -s --format=%P "$source"); do
+      [[ ${restored[$parent]-} ]] ||
+        error "The recorded replay for '$subdir/' is incomplete. No changes were published."
+      parents+=("${restored[$parent]}")
+    done
+    tree=$(history:tree "$source")
+    restored[$source]=$(history:object "$source" "$tree" "" "${parents[@]}")
+  done
+  printf '%s\n' "${restored[$tip]}"
+}
+
 history:export() {
   set -e
-  local commits source parent base tree candidate first raw_source encoded
+  local commits source parent base tree candidate first raw_source encoded source_parents mapped_base
   encoded=$(history:path-code "$subdir")
   declare -A projected=()
   if [[ $history_state == unpublished ]]; then
@@ -923,8 +968,24 @@ history:export() {
     tree=$(history:tree "$source")
     base=$(history:historical-base "$source")
     [[ $base != none ]] || base=
+    source_parents=$(git show -s --format=%P "$source")
+    candidate=
+    if [[ $base ]]; then
+      for parent in $source_parents; do
+        [[ $(history:header "$parent" git-subrepo-rewrite) == "1 "*" $encoded" &&
+           $(history:header "$parent" git-subrepo-rewrite) != "1 $base $encoded" ]] || continue
+        [[ $(history:tree "$parent") == "$tree" ]] || continue
+        mapped_base=$(git config --blob "$source:$gitrepo" subrepo-v2.mappedCommit)
+        candidate=$(history:restore-replay "$parent" "$base" "$mapped_base" "$encoded")
+        break
+      done
+    fi
+    if [[ $candidate ]]; then
+      projected[$source]=$candidate
+      continue
+    fi
     local parents=() seen
-    for parent in $(git show -s --format=%P "$source"); do
+    for parent in $source_parents; do
       parent=${projected[$parent]-}
       [[ $parent ]] || continue
       seen=" ${parents[*]} "

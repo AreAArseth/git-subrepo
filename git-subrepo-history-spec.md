@@ -16,10 +16,17 @@ section. The original upstream commit remains the synchronization identity;
 `mappedCommit` identifies its prefixed browsing counterpart.
 
 Imports use normal Git commits, including hooks and configured signing, with
-the previous project HEAD first and the mapped upstream tip second. Rewriting
-preserves raw message bytes and identities, removes invalidated signatures, and
-uses versioned commit headers for provenance. Exports use original-layout history,
-not browsing ancestry. Ordinary clones retain imported history without cache refs.
+the previous project HEAD first and the mapped upstream tip second. Rebase
+integrations instead attach the mapped, completed replay tip, which contains
+the mapped upstream ancestry. This retains each resolved local commit across
+unpublished pulls and ordinary fresh clones. Export restores that replay to
+the original shared layout before adding subsequent project-side changes;
+it does not replay superseded edits from the project's first-parent chain.
+The tracking identity and `mappedCommit` still describe the actual upstream,
+not the unpublished replay. Rewriting preserves raw message bytes and identities,
+removes invalidated signatures, and uses versioned commit headers for provenance.
+Exports use original-layout history, never prefixed browsing commits. Ordinary
+clones retain imported history without cache refs.
 
 History repair is detected automatically but never silently approved. Each repair
 requires confirmation or a proposal-bound `--accept-repair` token. It preserves
