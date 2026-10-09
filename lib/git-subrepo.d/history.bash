@@ -930,9 +930,10 @@ history:restore-replay() {
     [[ $record == "1 "*" $encoded" ]] ||
       error "The recorded replay for '$subdir/' has invalid upstream provenance."
     original=${record#1 }; original=${original% "$encoded"}
-    git merge-base --is-ancestor "$original" "$base" &&
-      [[ $(git rev-parse "$source:$subdir") == "$(git rev-parse "$original^{tree}")" ]] ||
+    if ! git merge-base --is-ancestor "$original" "$base" ||
+       [[ $(git rev-parse "$source:$subdir") != "$(git rev-parse "$original^{tree}")" ]]; then
       error "The recorded replay for '$subdir/' has an inconsistent upstream boundary."
+    fi
     restored[$source]=$original
   done
   for source in $commits; do
