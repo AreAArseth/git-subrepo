@@ -43,6 +43,8 @@ history:lifetime-start() {
       fi
       history:release-files
     else
+      # The receipt permits reclamation, so release our FIFO reader first.
+      exec 0<&-
       : > "$history_tmp/lifetime-ended"
     fi
   ) < "$history_tmp/lifetime" &
@@ -101,7 +103,7 @@ history:lock-gate() {
 history:lock() {
   [[ $command =~ ^(help|version|upgrade)$ ]] && return 0
   history_common=$(git rev-parse --git-common-dir)
-  history_common=$(cd "$history_common" && pwd -P)
+  history_common=$(CDPATH='' cd -- "$history_common" && pwd -P)
   history_tmp=$(mktemp -d "$history_common/subrepo-operation.XXXXXXXX")
   HISTORY_CLEANUP_COMMON=$history_common
   HISTORY_CLEANUP_TMP=$history_tmp
@@ -157,7 +159,7 @@ Finish that operation before retrying. No project files have been changed."
     previous_tmp=$(git config --blob "$previous" lock.nonce) || previous_tmp=
     [[ ${previous_tmp##*/} =~ ^subrepo-operation\.[a-zA-Z0-9]{8}$ &&
        ! -L $previous_tmp &&
-       $(cd "${previous_tmp%/*}" 2>/dev/null && pwd -P) == "$history_common" ]] ||
+       $(CDPATH='' cd -- "${previous_tmp%/*}" 2>/dev/null && pwd -P) == "$history_common" ]] ||
       error "The interrupted operation has an invalid temporary-directory record.
 Its files were not removed. Ask the repository maintainer to inspect refs/subrepo-operation-lock before retrying."
     previous_tmp=$history_common/${previous_tmp##*/}
@@ -234,6 +236,8 @@ history:release-files() {
     while IFS= read -r ignored; do :; done
     wait "$cleanup_pid" || return $?
   fi
+  # NFS retains an unlinked open FIFO as a .nfs file, preventing directory removal.
+  exec 0<&-
   if [[ $gate == "$common/subrepo-operation.guard" && -d $gate && ! -L $gate ]]; then
     if ! { rmdir "$gate/${temp##*/}" && rmdir "$gate"; }; then
       error "The operation process lock could not be released. Its remaining files were preserved for inspection."
@@ -1527,7 +1531,7 @@ No project files were changed."
 history:read-objects() {
   local objects
   objects=$(git rev-parse --git-path objects)
-  objects=$(cd "$objects" && pwd -P)
+  objects=$(CDPATH='' cd -- "$objects" && pwd -P)
   # Rendering and equivalence need real projected objects, but must not publish
   # them. Keep this scope below fetch and let the operation lock own cleanup.
   # C-quote the alternate so colons, quotes and backslashes in paths are safe.
