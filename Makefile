@@ -33,6 +33,8 @@ DOCKER_TESTS := $(BASH_GIT_COMBINATIONS:%=docker-test-%)
 DOCKER_BASH_TESTS := $(BASH_VERSIONS:%=docker-bash-test-%)
 
 prove ?=
+jobs ?= 4
+legacy_jobs ?= 1
 test ?= test/
 bash ?= 5.3
 git ?= 2.51
@@ -44,6 +46,7 @@ help:
 	@echo 'Makefile rules:'
 	@echo ''
 	@echo 'test       Run all tests'
+	@echo '           jobs=4 by default; jobs=1 for serial tests; prove=--timer for timings'
 	@echo 'install    Install $(NAME)'
 	@echo 'uninstall  Uninstall $(NAME)'
 	@echo 'env        Show environment variables to set'
@@ -61,7 +64,7 @@ help:
 
 .PHONY: test
 test:
-	prove $(prove) $(test)
+	prove -j$(jobs) $(prove) $(test)
 
 .PHONY: test-history-compat
 test-history-compat:
@@ -72,7 +75,7 @@ test-all: test docker-tests
 
 CI_TEST:
 	@echo "Running CI tests with oldest and newest bash/git combinations"
-	$(call docker-make-test,$(lastword $(BASH_VERSIONS)),$(lastword $(GIT_VERSIONS)))
+	$(call docker-make-test,$(lastword $(BASH_VERSIONS)),$(lastword $(GIT_VERSIONS)),$(legacy_jobs))
 	$(call docker-make-test,$(firstword $(BASH_VERSIONS)),$(firstword $(GIT_VERSIONS)))
 
 docker-test:
@@ -172,6 +175,6 @@ define docker-make-test
 		    export PATH=/bash-$(1)/bin:/git-$(2)/bin:$$PATH && \
 		    bash --version && \
 		    git --version && \
-		    make test prove="$(prove)" test="$(test)" \
+		    make test jobs="$(if $(3),$(3),$(jobs))" prove="$(prove)" test="$(test)" \
 		'
 endef

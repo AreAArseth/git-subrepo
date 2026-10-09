@@ -889,9 +889,21 @@ run it with:
 
     make test
 
-or if you don't have C<make> on your system:
+Test files run in four parallel jobs, each with its own temporary repositories
+and Git configuration. Use C<make test jobs=1> to run serially, or set C<jobs> to
+another positive number to adjust concurrency. The same setting applies to
+Docker test targets. C<make CI_TEST> keeps the oldest Bash/Git combination serial
+because old Git can stall under emulated parallel execution; the newest uses
+C<jobs>. Override the oldest separately with C<make CI_TEST legacy_jobs=2>.
 
-    prove -v test
+For per-file timings or a focused test:
+
+    make test prove=--timer
+    make test test=test/history-rebase-resolution.t
+
+Without C<make> on your system:
+
+    prove -j4 -v test
 
 =head1 Upgrading
 

@@ -949,10 +949,24 @@ run it with:
 \&    make test
 .Ve
 .PP
-or if you don't have \f(CW\*(C`make\*(C'\fR on your system:
+Test files run in four parallel jobs, each with its own temporary repositories
+and Git configuration. Use \f(CW\*(C`make test jobs=1\*(C'\fR to run serially, or set \f(CW\*(C`jobs\*(C'\fR to
+another positive number to adjust concurrency. The same setting applies to
+Docker test targets. \f(CW\*(C`make CI_TEST\*(C'\fR keeps the oldest Bash/Git combination serial
+because old Git can stall under emulated parallel execution; the newest uses
+\f(CW\*(C`jobs\*(C'\fR. Override the oldest separately with \f(CW\*(C`make CI_TEST legacy_jobs=2\*(C'\fR.
+.PP
+For per-file timings or a focused test:
+.PP
+.Vb 2
+\&    make test prove=--timer
+\&    make test test=test/history-rebase-resolution.t
+.Ve
+.PP
+Without \f(CW\*(C`make\*(C'\fR on your system:
 .PP
 .Vb 1
-\&    prove \-v test
+\&    prove \-j4 \-v test
 .Ve
 .SH "Upgrading"
 .IX Header "Upgrading"

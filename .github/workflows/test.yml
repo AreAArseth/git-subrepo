@@ -58,6 +58,6 @@ jobs:
           git config --global --add safe.directory "$PWD";
           git config --global --add safe.directory "$PWD.git";
       - if: startsWith(matrix.os, 'macos')
-        run: make test
+        run: make test prove=--timer
       - if: startsWith(matrix.os, 'ubuntu')
-        run: make CI_TEST
+        run: make CI_TEST prove=--timer
