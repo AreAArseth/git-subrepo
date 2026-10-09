@@ -63,6 +63,11 @@ help:
 test:
 	prove $(prove) $(test)
 
+.PHONY: test-history-compat
+test-history-compat:
+	@test -n "$(legacy_root)" || { echo 'Set legacy_root to a pinned legacy source checkout'; exit 1; }
+	GIT_SUBREPO_LEGACY_ROOT="$(legacy_root)" prove $(prove) test/compat/history-gate.t
+
 test-all: test docker-tests
 
 CI_TEST:
@@ -97,10 +102,10 @@ $(DOCKER_BASH_TESTS):
 # Install support:
 install:
 	install -d -m 0755 $(INSTALL_LIB)/
-	install -C -m 0755 $(LIB) $(INSTALL_LIB)/
 	install -d -m 0755 $(INSTALL_EXT)/
-	install -C -m 0644 $(EXTS) $(INSTALL_EXT)/
 	install -d -m 0755 $(INSTALL_MAN1)/
+	install -C -m 0755 $(LIB) $(INSTALL_LIB)/
+	install -C -m 0644 $(EXTS) $(INSTALL_EXT)/
 	install -C -m 0644 $(MAN1)/$(NAME).1 $(INSTALL_MAN1)/
 
 # Uninstall support:
@@ -143,12 +148,23 @@ compgen: force
 clean:
 	rm -fr tmp test/tmp
 
+# SSH signing needs a passwd entry as well as the host's numeric UID.
 define docker-make-test
 	docker run --rm \
-	    --user $(shell id -u):$(shell id -g) \
+	    --user 0:0 \
+	    --env SUBREPO_TEST_UID=$(shell id -u) \
+	    --env SUBREPO_TEST_GID=$(shell id -g) \
 	    -v $(PWD):/git-subrepo \
 	    -w /git-subrepo \
 	    $(DOCKER_IMAGE) \
+		/bin/bash -c ' \
+		    set -e; \
+		    getent group "$$SUBREPO_TEST_GID" >/dev/null || \
+		        groupadd -g "$$SUBREPO_TEST_GID" subrepo-test; \
+		    getent passwd "$$SUBREPO_TEST_UID" >/dev/null || \
+		        useradd -M -u "$$SUBREPO_TEST_UID" -g "$$SUBREPO_TEST_GID" subrepo-test; \
+		    exec runuser -u "$$(getent passwd "$$SUBREPO_TEST_UID" | cut -d: -f1)" -- "$$@" \
+		' -- \
 		/bin/bash -c ' \
 		    set -x && \
 		    [[ -d /bash-$(1) ]] && \
@@ -156,6 +172,6 @@ define docker-make-test
 		    export PATH=/bash-$(1)/bin:/git-$(2)/bin:$$PATH && \
 		    bash --version && \
 		    git --version && \
-		    make test prove=$(prove) test=$(test) \
+		    make test prove="$(prove)" test="$(test)" \
 		'
 endef

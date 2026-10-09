@@ -23,7 +23,7 @@ clone-foo-and-bar
 
 (
   cd "$OWNER/foo"
-  git subrepo clone ../bar
+  git subrepo clone --history=legacy ../bar
 ) &> /dev/null || die
 
 (

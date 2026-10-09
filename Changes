@@ -1,3 +1,33 @@
+version: 0.5.0-dev
+- New subrepos use prefixed imported history and complete v2 tracking metadata.
+- Add explicit legacy migration, confirmed history repair, and shared-history log.
+- Preserve legacy behavior with --history=legacy and existing tracking files.
+- Add migrate --all previews and preflight checks; clarify push/pull prerequisites.
+- Batch prefixed-history reads, tree creation and mapping updates during migration.
+- Reject historical nested metadata before rewriting, including quoted filenames.
+- Preserve newer project edits and manual worktree commits during retarget;
+  refuse simultaneous edits, support previews, and make completed retargets no-ops.
+- Allow bounded, labelled history with pending worktrees and grouped one-line
+  output; batch log metadata reads and clarify remote freshness and publication.
+- Allow historical root .gitrepo files when absent from the incoming tip;
+  preserve their original contents while still refusing genuinely nested subrepos.
+- Validate migration eligibility during previews and serialize readers with writers.
+- Reject invalid join methods and mismatched prefixed reclone sources; persist
+  push --update settings without publishing unchanged shared content.
+- Preserve hook environment markers when retrying interrupted integrations;
+  keep detailed status projections out of the repository object database.
+- Keep grouped history projections read-only, including in fresh clones;
+  replace committed shared-file edits when explicitly recloning with --force.
+- Retain operation locks while Git descendants are still running, and keep
+  completed retarget imports resumable until publication finishes.
+- Reject explicitly empty history-format options; clarify migration defaults.
+- Keep existing shared-worktree indexes unchanged during retarget previews.
+- Preserve edited integration messages when retrying hook or signing failures.
+- Allow retarget --force and its exact retries without enabling force pushes.
+- Preflight shared worktrees before forced replacement; scope nested workflows
+  explicitly to legacy history.
+- Clean up test fixtures before capability skips and clarify retarget --all usage.
+---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST
 - Revert Fix bash-completion due to not being compatible with Windows

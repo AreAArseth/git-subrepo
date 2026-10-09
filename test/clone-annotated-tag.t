@@ -18,7 +18,7 @@ clone-foo-and-bar
 {
   clone_output=$(
     cd "$OWNER/foo"
-    git subrepo clone ../bar/.git -b lightweight_tag light
+    git subrepo clone --history=legacy ../bar/.git -b lightweight_tag light
   )
 
   # Check output is correct:
@@ -31,7 +31,7 @@ clone-foo-and-bar
 {
   clone_output=$(
     cd "$OWNER/foo"
-    git subrepo clone ../bar/.git -b annotated_tag ann 2>&1 || true
+    git subrepo clone --history=legacy ../bar/.git -b annotated_tag ann 2>&1 || true
   )
 
   # Check output is correct:

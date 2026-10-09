@@ -22,7 +22,7 @@ gitrepo=$OWNER/init/doc/.gitrepo
 
 output=$(
   cd "$OWNER/init"
-  git subrepo init doc
+  git subrepo init --history=legacy doc
 )
 
 is "$output" "Subrepo created from 'doc' (with no remote)." \
@@ -48,7 +48,7 @@ rm -fr "$OWNER/init"
 git clone "$UPSTREAM/init" "$OWNER/init" &>/dev/null
 (
   cd "$OWNER/init"
-  git subrepo init doc -r git@github.com:user/repo -b foo -M rebase
+  git subrepo init --history=legacy doc -r git@github.com:user/repo -b foo -M rebase
 ) >/dev/null
 
 test-gitrepo-field "remote" "git@github.com:user/repo"

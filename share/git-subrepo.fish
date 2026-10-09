@@ -5,7 +5,7 @@ function __fish_git_subrepo_subdirs
 end
 
 complete -c git-subrepo -f
-complete -c git-subrepo -n '__fish_use_subcommand' -a 'branch clean clone commit config fetch help init pull push retarget status upgrade version'
+complete -c git-subrepo -n '__fish_use_subcommand' -a 'branch clean clone commit config fetch help init log migrate pull push retarget status upgrade version'
 complete -c git-subrepo -s h -d 'Show the command summary'
 complete -c git-subrepo -l help -d 'Help overview'
 complete -c git-subrepo -l version -d 'Print the git-subrepo version number'
@@ -24,6 +24,12 @@ complete -c git-subrepo -l update -s u -d 'Add the --branch and/or --remote over
 complete -c git-subrepo -l log -s l -d 'Show commit summaries for pending pull/push'
 complete -c git-subrepo -l log-limit -d 'Limit the number of commits shown with --log (default 5)' -r
 complete -c git-subrepo -l diff -d 'Show diffstat for pending pull/push'
+complete -c git-subrepo -l history -d 'History for new subrepos: prefixed (default) or legacy' -r
+complete -c git-subrepo -l dry-run -d 'Preview migration or retarget without changing the repository'
+complete -c git-subrepo -l accept-repair -d 'Approve the exact history repair previously proposed' -r
+complete -c git-subrepo -l incoming -d 'Show fetched changes not yet imported'
+complete -c git-subrepo -l group-equivalent -d 'Group verified representations of the same shared change'
+complete -c git-subrepo -l oneline -d 'Show one line per history entry'
 complete -c git-subrepo -l quiet -s q -d 'Show minimal output'
 complete -c git-subrepo -l verbose -s v -d 'Show verbose output'
 complete -c git-subrepo -l debug -s d -d 'Show the actual commands used'
@@ -33,6 +39,8 @@ complete -c git-subrepo -n '__fish_git_using_command clean' -a '(__fish_git_subr
 complete -c git-subrepo -n '__fish_git_using_command commit' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -n '__fish_git_using_command config' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -n '__fish_git_using_command fetch' -a '(__fish_git_subrepo_subdirs)'
+complete -c git-subrepo -n '__fish_git_using_command log' -a '(__fish_git_subrepo_subdirs)'
+complete -c git-subrepo -n '__fish_git_using_command migrate' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -n '__fish_git_using_command pull' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -n '__fish_git_using_command push' -a '(__fish_git_subrepo_subdirs)'
 complete -c git-subrepo -n '__fish_git_using_command retarget' -a '(__fish_git_subrepo_subdirs)'

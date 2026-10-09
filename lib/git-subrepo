@@ -30,7 +30,7 @@ fi
 bash+:import :std can version-check
 
 
-VERSION=0.4.9
+VERSION=0.5.0-dev
 REQUIRED_BASH_VERSION=4.0
 REQUIRED_GIT_VERSION=2.23.0
 GIT_TMP=$(git rev-parse --git-common-dir 2> /dev/null || echo .git)/tmp
@@ -42,6 +42,7 @@ git subrepo <command> <arguments> <options>
 Commands:
   clone     Clone a remote repository into a local subdirectory
   init      Turn a current subdirectory into a subrepo
+  migrate   Upgrade a legacy subrepo to prefixed history
   pull      Pull upstream changes to the subrepo
   push      Push local subrepo changes upstream
   retarget  Retarget a subrepo to a new upstream
@@ -51,6 +52,7 @@ Commands:
   commit    Commit a merged subrepo branch into the mainline
 
   status    Get status of a subrepo (or all of them)
+  log       Browse local and imported shared changes
   clean     Remove branches, remotes and refs for a subrepo
   config    Set subrepo configuration properties
 
@@ -81,6 +83,12 @@ u,update    Add the --branch and/or --remote overrides to .gitrepo
 l,log       Show commit summaries for pending pull/push
 log-limit=  Limit the number of commits shown with --log (default 5)
 diff        Show diffstat for pending pull/push
+history=    History for new subrepos: prefixed (default) or legacy
+dry-run     Preview migration or retarget without changing the repository
+accept-repair= Approve the exact history repair previously proposed
+incoming    Show fetched changes not yet imported
+group-equivalent Group verified representations of the same shared change
+oneline     Show one line per history entry
 
 q,quiet     Show minimal output
 v,verbose   Show verbose output
@@ -147,6 +155,16 @@ main() {
   local commit_msg_file=        # Custom commit message using --file
 
   local join_method=            # Current join method (rebase/merge)
+  local history_mode=legacy history_option='' history_state='' history_mapped=''
+  local history_prefix='' history_rewrite='' history_dry_run=false
+  local history_recorded_remote='' history_recorded_branch=''
+  local history_accept='' history_incoming=false history_group=false
+  local history_oneline=false history_log_args=()
+  local history_invocation=("$@")
+  local history_common='' history_tmp='' history_lock='' history_lease=''
+  local history_finished_request=false
+  local history_resume_after=''
+  local history_resume_current=false history_retarget_ready=''
   local allow_divergent_history=false # Allow subrepo history outside upstream
 
   local FAIL=true               # Flag for RUN: fail on error
@@ -168,8 +186,16 @@ main() {
 
   # Make sure repo is in the proper state:
   assert-repo-is-ready
-
+  # Recovery can create a commit, so initialize its hook environment first.
   command-init
+  history:lock
+  history:resume-integration
+  if $history_finished_request; then
+    history:release
+    trap - EXIT INT TERM
+    return 0
+  fi
+  assert-working-copy-is-clean
 
   if $all_wanted && [[ ! $command =~ ^(help|status)$ ]]; then
     if [[ -n $subrepo_branch ]]; then
@@ -179,7 +205,24 @@ main() {
     # Run the command on all subrepos
     local args=( "${command_arguments[@]}" )
     get-all-subrepos
+    if [[ $command == migrate ]]; then
+      [[ ${#args[@]} -eq 0 ]] ||
+        usage-error "Use either a subdir or --all for migrate, not both."
+      history:preflight-migrate-all
+    fi
+    if [[ $command =~ ^(pull|push|branch|commit|retarget|clean|fetch)$ ]]; then
+      for subdir in "${subrepos[@]}"; do
+        history:preflight-all "$subdir"
+      done
+    fi
     for subdir in "${subrepos[@]}"; do
+      if [[ $command == migrate ]] && $history_dry_run; then continue; fi
+      if [[ $history_resume_after ]]; then
+        [[ $subdir == "$history_resume_after" ]] || continue
+        history_resume_after=
+        if ! $history_resume_current; then continue; fi
+        history_resume_current=false
+      fi
       command-prepare
       subrepo_remote=
       subrepo_branch=
@@ -191,6 +234,8 @@ main() {
     command-prepare
     "command:$command"
   fi
+  history:release
+  trap - EXIT INT TERM
 }
 
 #------------------------------------------------------------------------------
@@ -276,7 +321,22 @@ command:pull() {
 command:retarget() {
   command-setup +subdir
 
+  if $history_dry_run; then
+    [[ $history_mode == prefixed ]] ||
+      error "Retarget previews require prefixed history. No files or refs were changed."
+    history:preview-retarget
+    return
+  fi
   subrepo:retarget
+  if [[ $history_mode == prefixed && $CODE == -2 ]] && ! OK; then
+    say "'$subdir/' is already tracking this branch; no changes made."
+    return
+  fi
+  if [[ $history_mode == prefixed ]] && OK; then
+    say "Retargeted and synchronized '$subdir/' with '$subrepo_remote' ($subrepo_branch)."
+    say "Project-only files were not sent upstream. Publish the project branch separately with git push when ready."
+    return
+  fi
   if OK; then
     say "Subrepo '$subdir' retargeted to '$subrepo_remote' ($subrepo_branch)."
     if $update_wanted && [[ $override_branch || $override_remote ]]; then
@@ -301,11 +361,19 @@ command:push() {
   subrepo:push
   if OK; then
     say "Subrepo '$subdir' pushed to '$subrepo_remote' ($subrepo_branch)."
+    if [[ $history_mode == prefixed ]]; then
+      say "Published shared files only; commit messages may also describe project-only changes."
+      say "The project has new tracking commits. Publish the project branch separately with git push when ready."
+    fi
   elif [[ $CODE -eq -2 ]]; then
     say "Subrepo '$subdir' has no new commits to push."
   elif [[ $CODE -eq -3 ]]; then
     say "Subrepo '$subdir' has no new commits to push."
-    say "Recorded the sync point in '$gitrepo'."
+    if [[ $history_mode == prefixed ]]; then
+      say "Updated shared repository settings in '$gitrepo'."
+    else
+      say "Recorded the sync point in '$gitrepo'."
+    fi
   elif [[ $CODE -eq 1 ]]; then
     error-join
     return "$CODE"
@@ -371,7 +439,10 @@ command:commit() {
 
 # `git subrepo status [<subdir>]` command:
 command:status() {
-  subrepo:status | ${GIT_SUBREPO_PAGER}
+  (
+    set -o pipefail
+    subrepo:status | ${GIT_SUBREPO_PAGER}
+  )
 }
 
 status-refs() {
@@ -474,7 +545,7 @@ status-print-diffstat() {
   local diff_output
   local indented_diff_output
   diff_output=$(git diff --stat "$@" 2> /dev/null) || return
-  [[ $diff_output ]] || return
+  [[ $diff_output ]] || return 0
   indented_diff_output=${diff_output//$'\n'/$'\n      '}
   echo "    $title diff:"
   printf '      %s\n' "$indented_diff_output"
@@ -493,6 +564,10 @@ command:clean() {
 # Wrap git config $gitrepo
 command:config() {
   command-setup +subdir +config_option config_value
+  if [[ $history_mode == prefixed ]]; then
+    history:config
+    return
+  fi
   # shellcheck disable=2154
   o "Update '$subdir' configuration with $config_option=${config_value-}"
 
@@ -611,21 +686,33 @@ subrepo:clone() {
 
   if $force_wanted; then
     o "--force indicates a reclone."
-    CALL subrepo:fetch
-    read-gitrepo-file
+    if [[ $history_mode == prefixed ]]; then
+      read-gitrepo-file
+      CALL subrepo:fetch
+    else
+      CALL subrepo:fetch
+      read-gitrepo-file
+    fi
     o "Check if we already are up to date."
     if [[ $upstream_head_commit == "$subrepo_commit" ]]; then
-      reclone_up_to_date=true
-      return
+      # Prefixed reclones also replace committed edits and reconnect lost history.
+      if [[ $history_mode != prefixed ]] ||
+         { ! history:needs-repair &&
+           [[ $(history:tree HEAD) == "$(git rev-parse "$upstream_head_commit^{tree}")" ]]; }; then
+        reclone_up_to_date=true
+        return
+      fi
     fi
-    o "Remove the old subdir."
-    RUN git rm -r -- "$subdir"
+    if [[ $history_mode != prefixed ]]; then
+      o "Remove the old subdir."
+      RUN git rm -r -- "$subdir"
 
-    if [[ -z $override_branch ]]; then
-      o "Determine the upstream head branch."
-      get-upstream-head-branch
-      subrepo_branch="$output"
-      override_branch="$output" # Force update of the branch in .gitrepo
+      if [[ -z $override_branch ]]; then
+        o "Determine the upstream head branch."
+        get-upstream-head-branch
+        subrepo_branch="$output"
+        override_branch="$output" # Force update of the branch in .gitrepo
+      fi
     fi
   else
     assert-subdir-empty
@@ -648,6 +735,10 @@ subrepo:clone() {
 
 # Init a new subrepo from current repo:
 subrepo:init() {
+  if [[ $history_mode == prefixed ]]; then
+    history:init
+    return
+  fi
   local branch_name=subrepo/${subref:??}
   # Check if subdir is proper candidate for this init:
   assert-subdir-ready-for-init
@@ -696,6 +787,7 @@ subrepo:pull() {
     o "Rebase changes to $refs_subrepo_fetch"
     FAIL=false OUT=true RUN git rebase "$refs_subrepo_fetch" "$branch_name"
     if ! OK; then
+      [[ $history_mode != prefixed ]] || history:conflict
       say "The \"git rebase\" command failed:"
       say
       say "  ${output//$'\n'/$'\n'  }"
@@ -706,6 +798,7 @@ subrepo:pull() {
     o "Merge in changes from $refs_subrepo_fetch"
     FAIL=false RUN git merge "$refs_subrepo_fetch"
     if ! OK; then
+      [[ $history_mode != prefixed ]] || history:conflict
       say "The \"git merge\" command failed:"
       say
       say "  ${output//$'\n'/$'\n'  }"
@@ -726,6 +819,10 @@ subrepo:pull() {
 
 # Retarget a subrepo to a new upstream branch/remote:
 subrepo:retarget() {
+  if [[ $history_mode == prefixed ]]; then
+    history:retarget
+    return
+  fi
   if [[ $subrepo_remote == none ]]; then
     error "Can't retarget subrepo. Remote is 'none' in '$gitrepo'."
   fi
@@ -839,6 +936,10 @@ subrepo:retarget() {
 
 # Push a properly merged subrepo branch upstream:
 subrepo:push() {
+  if [[ $history_mode == prefixed ]]; then
+    history:push
+    return
+  fi
   local branch_name=$branch
   local new_upstream=false
   local branch_created=false
@@ -1000,6 +1101,9 @@ subrepo:fetch() {
   o "Get the upstream subrepo HEAD commit."
   OUT=true RUN git rev-parse FETCH_HEAD^0
   upstream_head_commit=$output
+  if [[ $history_mode == prefixed && $history_state == tracking ]]; then
+    history:check-upstream "$upstream_head_commit"
+  fi
 
   o "Create ref '$refs_subrepo_fetch'."
   git:make-ref "$refs_subrepo_fetch" FETCH_HEAD^0
@@ -1008,6 +1112,10 @@ subrepo:fetch() {
 # Create a subrepo branch containing all changes
 # shellcheck disable=2120
 subrepo:branch() {
+  if [[ $history_mode == prefixed ]]; then
+    history:branch "${1:-subrepo/$subref}"
+    return
+  fi
   local branch=${1:-"subrepo/$subref"}
   o "Check if the '$branch' branch already exists."
   git:branch-exists "$branch" && return
@@ -1162,6 +1270,10 @@ If you recently changed .gitrepo remote/branch, run: git subrepo retarget $subdi
 
 # Commit a merged subrepo branch:
 subrepo:commit() {
+  if [[ $history_mode == prefixed ]]; then
+    history:commit
+    return
+  fi
   o "Check that '$subrepo_commit_ref' exists."
   git:rev-exists "$subrepo_commit_ref" ||
     error "Commit ref '$subrepo_commit_ref' does not exist."
@@ -1267,6 +1379,13 @@ subrepo:status() {
     read-gitrepo-file
     if $fetch_wanted; then
       subrepo:fetch
+    fi
+    if [[ $history_mode == prefixed ]]; then
+      upstream_head_commit=$(git rev-parse --verify "$refs_subrepo_fetch" 2>/dev/null) || upstream_head_commit=
+      history:validate-path
+      history:status
+      history_mode=legacy
+      continue
     fi
 
     if $quiet_wanted; then
@@ -1439,7 +1558,7 @@ get-command-options() {
 
   eval "$(
     echo "$GETOPT_SPEC" |
-      git rev-parse --parseopt -- "$@" ||
+      git rev-parse --parseopt --keep-dashdash -- "$@" ||
     echo exit $?
   )"
 
@@ -1465,6 +1584,8 @@ get-command-options() {
           wanted_commit_message=$1
           shift;;
       -M) join_method=$1
+          [[ $join_method == merge || $join_method == rebase ]] ||
+            error "The --method option must be merge or rebase."
           shift;;
       -r) subrepo_remote=$1
           override_remote=$1
@@ -1488,6 +1609,16 @@ get-command-options() {
       --diff)
           status_diff_wanted=true
           status_diff_cli=true ;;
+      --history)
+          history_option=$1
+          [[ $history_option == prefixed || $history_option == legacy ]] ||
+            error "Choose --history=prefixed or --history=legacy."
+          shift ;;
+      --dry-run) history_dry_run=true ;;
+      --accept-repair) history_accept=$1; shift ;;
+      --incoming) history_incoming=true ;;
+      --group-equivalent) history_group=true ;;
+      --oneline) history_oneline=true ;;
       -q) quiet_wanted=true ;;
       -v) verbose_wanted=true ;;
       -d) debug_wanted=true ;;
@@ -1510,13 +1641,34 @@ get-command-options() {
   done
 
   # Set subrepo command:
+  [[ ${1:-} != -- ]] || shift
   command=$1; shift
 
   # Make sure command exists:
   can "command:$command" ||
     usage-error "'$command' is not a command. See 'git subrepo help'."
 
-  command_arguments=("$@")
+  local arg boundary=false
+  for arg in "$@"; do
+    if $boundary && [[ $command == log ]]; then
+      history_log_args+=("$arg")
+    elif ! $boundary && [[ $arg == -- ]]; then
+      boundary=true
+    else
+      command_arguments+=("$arg")
+    fi
+  done
+  if [[ $history_option ]]; then
+    [[ $command =~ ^(clone|init|migrate)$ ]] ||
+      usage-error "--history is only for clone, init, or migrate."
+  fi
+  ! $history_dry_run || [[ $command =~ ^(migrate|retarget)$ ]] ||
+    usage-error "--dry-run is only for migrate or retarget."
+  [[ ! $history_accept || $command =~ ^(pull|push|branch|commit|retarget)$ ]] ||
+    usage-error "--accept-repair is only for a command that can repair history."
+  if $history_incoming || $history_group || $history_oneline; then
+    [[ $command == log ]] || usage-error "History display options require 'log'."
+  fi
   if [[ ${command_arguments[*]-} && ${#command_arguments[@]} -gt 0 ]]; then
     local first=${command_arguments[0]}
     first=${first%/}
@@ -1575,6 +1727,8 @@ options_pull='all branch edit force message remote update'
 options_push='all branch force message remote squash update'
 options_retarget='all branch force remote update'
 options_status='ALL all fetch log log-limit diff'
+options_log='fetch'
+options_migrate='all message'
 check_option() {
   local var=options_${command//-/_}
   [[ ${!var} =~ $1 ]] ||
@@ -1606,6 +1760,13 @@ command-prepare() {
   original_head_commit=${output:-none}
   # Per subrepo state, or a '--all' run leaks it into the next subrepo:
   sync_point_recorded=false
+  history_mode=legacy
+  history_state=
+  history_mapped=
+  history_prefix=
+  history_rewrite=
+  history_recorded_remote=
+  history_recorded_branch=
 }
 
 # Do the setup steps needed by most of the subrepo subcommands:
@@ -1613,21 +1774,55 @@ command-setup() {
   get-params "$@"
 
   check-and-normalize-subdir
-  encode-subdir
   gitrepo=$subdir/.gitrepo
+  [[ ! -L $gitrepo ]] ||
+    error "The tracking file '$gitrepo' must be a regular file, not a symbolic link."
+
+  # Determine the history mode before encoding worktree and ref names.
+  if [[ ! $command =~ ^(clone|init)$ ]]; then
+    read-gitrepo-file
+  elif [[ -f $gitrepo ]]; then
+    if git config --file="$gitrepo" --get-regexp '^subrepo-v2\.' > /dev/null; then
+      local requested_remote=$subrepo_remote
+      read-gitrepo-file
+      if [[ $command == clone &&
+            ( $requested_remote != "$history_recorded_remote" ||
+              $subrepo_branch != "$history_recorded_branch" ) ]]; then
+        error "Changing the remote or branch of '$subdir/' requires 'git subrepo retarget $(printf '%q' "$subdir")' with --remote or --branch, not clone --force.
+No files or refs were changed."
+      fi
+    fi
+    [[ ! $history_option || $history_option == "$history_mode" ]] ||
+      error "Changing history for '$subdir/' requires 'git subrepo migrate $subdir', not replacement."
+  else
+    history_mode=${history_option:-prefixed}
+    history_state=unpublished
+    history_prefix=$subdir
+    history_rewrite=1
+  fi
+  encode-subdir
 
   if ! $force_wanted; then
-    o "Check for worktree with branch subrepo/$subdir"
-    local _worktree
-    _worktree=$(
-      git worktree list |
-        grep "\[subrepo/$subdir\]" |
-        cut -d ' ' -f1
-    ) || true
-    if [[ $command =~ ^(commit)$ && -z $_worktree ]]; then
+    o "Check for worktree with branch subrepo/$subref"
+    local _worktree='' path='' entry
+    while IFS= read -r entry; do
+      case "$entry" in
+        "worktree "*) path=${entry#worktree } ;;
+        "branch refs/heads/subrepo/$subref") _worktree=$path; break ;;
+      esac
+    done < <(git worktree list --porcelain)
+    if [[ $command == commit && -z $_worktree && -z $subrepo_commit_ref ]]; then
       error "There is no worktree available, use the branch command first"
-    elif [[ ! $command =~ ^(branch|clean|commit|push|retarget)$ && $_worktree ]]; then
-      if [[ -e $gitrepo ]]; then
+    elif [[ ! $command =~ ^(branch|clean|commit|push|retarget|log)$ && $_worktree ]]; then
+      if [[ $history_mode == prefixed ]]; then
+        local worktree_status
+        worktree_status=$(git -C "$_worktree" status --short)
+        error "There is already a worktree with branch subrepo/$subdir.
+Shared worktree: $_worktree
+${worktree_status:-No uncommitted files; committed work may still need preserving.}
+Finish the existing shared operation there before retrying.
+Inspect and preserve its commits before using 'git subrepo clean $(printf '%q' "$subdir")'; do not discard it just to continue."
+      elif [[ -e $gitrepo ]]; then
         error "There is already a worktree with branch subrepo/$subdir.
 Use the --force flag to override this check or perform a subrepo clean
 to remove the worktree."
@@ -1647,9 +1842,11 @@ Use the --force flag to override this check or remove the worktree with
   refs_subrepo_fetch=refs/subrepo/$subref/fetch
   refs_subrepo_push=refs/subrepo/$subref/push
 
-  # Read/parse the .gitrepo file (unless clone/init; doesn't exist yet)
-  if [[ ! $command =~ ^(clone|init)$ ]]; then
-    read-gitrepo-file
+  if [[ $history_mode == prefixed ]]; then
+    history:validate-path
+    if [[ $command =~ ^(pull|push|branch|commit|retarget)$ ]] && ! $history_dry_run; then
+      history:ensure-healthy
+    fi
   fi
 
   true
@@ -1724,12 +1921,17 @@ guess-subdir() {
 #
 encode-subdir() {
   subref=$subdir
+  if [[ ${history_mode:-legacy} == prefixed ]]; then
+    subref=${subref//%/%25}
+  fi
   if [[ ! $subref ]] || git check-ref-format "subrepo/$subref"; then
     return
   fi
 
   ## 0. escape %, ensure the subref can be (almost) decoded back to subdir
-  subref=${subref//%/%25}
+  if [[ ${history_mode:-legacy} != prefixed ]]; then
+    subref=${subref//%/%25}
+  fi
 
   ## 1. They can include slash / for hierarchical (directory) grouping,
   ##    but no slash-separated component can begin with a dot .  or
@@ -1805,6 +2007,14 @@ read-gitrepo-file() {
   if [[ ! -f $gitrepo ]]; then
     error "No '$gitrepo' file."
   fi
+  [[ ! -L $gitrepo ]] ||
+    error "The tracking file '$gitrepo' must be a regular file, not a symbolic link."
+  history:check-layout "$gitrepo"
+  if git config --file="$gitrepo" --get-regexp '^subrepo-v2\.' > /dev/null; then
+    history:read
+    return
+  fi
+  history_mode=legacy
 
   # Read .gitrepo values:
   if [[ -z $subrepo_remote ]]; then
@@ -1843,6 +2053,11 @@ read-gitrepo-file() {
 
 # Update the subdir/.gitrepo state file:
 update-gitrepo-file() {
+  if [[ $history_mode == prefixed ]]; then
+    history:write "$gitrepo"
+    RUN git add -f -- "$gitrepo"
+    return
+  fi
   local short_commit=
 
   local newfile=false
@@ -1962,8 +2177,6 @@ assert-repo-is-ready() {
   [[ $command == clone ]] ||
     RUN git rev-parse --verify HEAD
 
-  assert-working-copy-is-clean
-
   # For now, only support actions from top of repo:
   if [[ $(git rev-parse --show-prefix) ]]; then
     error "Need to run subrepo command from top level directory of the repo."
@@ -1972,11 +2185,26 @@ assert-repo-is-ready() {
 
 assert-working-copy-is-clean() {
   # Repo is in a clean state:
-  if [[ $command =~ ^(clone|init|pull|push|branch|commit|retarget)$ ]]; then
+  if [[ $command =~ ^(clone|init|pull|push|branch|commit|retarget|migrate)$ ]]; then
     # TODO: Should we check for untracked files?
     local pwd
     pwd=$(pwd)
     o "Assert that working copy is clean: $pwd"
+    # Forced replacements can still be refused by shared-worktree preflight.
+    # Inspect without refreshing the parent index before that decision.
+    if $history_dry_run || { $force_wanted && [[ $command =~ ^(clone|pull)$ ]]; }; then
+      git diff-index --quiet --cached --ignore-submodules HEAD ||
+        error "Can't $command subrepo. Index has changes. ($pwd)"
+      # Status refreshes stale stat data in memory; optional locks control
+      # whether that refreshed index is written, including on older Git.
+      local changes
+      changes=$(git --no-optional-locks status --porcelain --untracked-files=no \
+        --ignore-submodules) ||
+        error "Can't $command subrepo. Unable to inspect working tree. ($pwd)"
+      [[ -z $changes ]] ||
+        error "Can't $command subrepo. Unstaged changes. ($pwd)"
+      return
+    fi
     git update-index -q --ignore-submodules --refresh
     git diff-files --quiet --ignore-submodules ||
       error "Can't $command subrepo. Unstaged changes. ($pwd)"
@@ -2299,6 +2527,10 @@ git:create-worktree() {
 }
 
 git:remove-worktree() {
+  if [[ ${history_mode:-legacy} == prefixed ]]; then
+    history:remove-worktree
+    return
+  fi
   o "Remove worktree: $worktree"
   if [[ -d $worktree ]]; then
     o "Check worktree for unsaved changes"
@@ -2368,7 +2600,11 @@ interactive() {
 # Call a function with indent increased:
 CALL() {
   local INDENT="  $INDENT"
-  "$@" || true
+  if [[ ${history_mode:-legacy} == prefixed ]]; then
+    "$@"
+  else
+    "$@" || true
+  fi
 }
 
 # Print verbose steps for commands with steps:
@@ -2411,6 +2647,8 @@ error() {
   echo -e "git-subrepo:" "$@" >&2
   exit 1
 }
+
+source "${SOURCE_DIR}/git-subrepo.d/history.bash"
 
 # Start at the end:
 [[ ${BASH_SOURCE[0]} != "$0" ]] || main "$@"

@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 
-# Set this locally for Windows:
-git config core.autocrlf input
-
 set -e
 
 # Isolate git configuration for tests to ensure consistent behavior
@@ -33,6 +30,9 @@ setup_git_config() {
   git config --global core.bare false
   git config --global core.logallrefupdates true
   git config --global core.repositoryformatversion 0
+  # Background maintenance can race object snapshots and fixture cleanup.
+  git config --global gc.auto 0
+  git config --global maintenance.auto false
 
   # Disable interactive prompts
   git config --global advice.detachedHead false
@@ -65,9 +65,6 @@ setup_git_config
 # Set the GIT_SUBREPO_ROOT for testing.
 source "$PWD"/.rc
 
-# Get the location of this script
-SCRIPT_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
-
 BASHLIB=$(
   find "$PWD"/ -type d -name bin -o -type d -name lib | tr '\n' ':'
 )
@@ -79,8 +76,8 @@ source bash+ :std
 
 source 'lib/git-subrepo'
 
-export TMP=$SCRIPT_DIR/tmp
-rm -fr "$TMP"
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/git-subrepo-tests.XXXXXX")
+export TMP
 
 #export GIT_EXEC_PATH=$PWD/lib:$(git --exec-path)
 export UPSTREAM=$TMP/upstream
@@ -130,7 +127,7 @@ clone-foo-and-bar() {
 subrepo-clone-bar-into-foo() {
   (
     cd "$OWNER/foo"
-    git subrepo clone "$UPSTREAM/bar"
+    git subrepo clone "$UPSTREAM/bar" --history=legacy
   ) &> /dev/null || die
 }
 

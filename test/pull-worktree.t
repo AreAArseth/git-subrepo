@@ -10,7 +10,7 @@ clone-foo-and-bar
 
 (
   cd "$OWNER/foo"
-  git subrepo clone ../bar bar
+  git subrepo clone --history=legacy ../bar bar
   git worktree add -b test ../wt
 ) &> /dev/null || die
 

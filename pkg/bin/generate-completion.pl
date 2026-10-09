@@ -36,7 +36,7 @@ sub main {
             or die "Bad usage: '$text'";
         my ($x1, $x2, $name) = split / +/, $usage;
         push @list, $name;
-        if ($usage =~ m#\Q$name\E \[?<subdir>\]?# and $name ne "init") {
+        if ($usage =~ m#\Q$name\E [\[(]?<subdir># and $name ne "init") {
             push @subdir_cmds, $name;
         }
     }

@@ -12,8 +12,8 @@ clone-foo-and-bar
 
 (
   cd "$OWNER/foo"
-  git subrepo clone --quiet "$UPSTREAM/bar" one
-  git subrepo clone --quiet "$UPSTREAM/bar" two
+  git subrepo clone --history=legacy --quiet "$UPSTREAM/bar" one
+  git subrepo clone --history=legacy --quiet "$UPSTREAM/bar" two
   add-new-files two/file
 )
 

@@ -15,7 +15,7 @@ use Test::More
   git init
   mkdir doc
   add-new-files doc/FooBar
-  git subrepo init doc || die
+  git subrepo init --history=legacy doc || die
   mkdir ../upstream
   git init --bare ../upstream || die
 ) &> /dev/null
