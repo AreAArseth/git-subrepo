@@ -154,7 +154,7 @@ for mode in legacy prefixed; do
 
   name=ambiguous-$mode-security
   tip=$(git -C "$OWNER/bar" rev-parse HEAD)
-  git -C "$OWNER/bar" push -q origin "$tip:refs/heads/$name" "$tip:refs/tags/$name"
+  git -C "$OWNER/bar" push -q origin "$tip:refs/tags/$name"
   repo=$OWNER/$name
   git clone -q "$UPSTREAM/foo" "$repo"
   (cd "$repo" && git subrepo clone "$UPSTREAM/bar" shared \
@@ -163,15 +163,38 @@ for mode in legacy prefixed; do
   git -C "$repo" add shared/ambiguous-change
   git -C "$repo" commit -qm 'Ambiguous selector contribution'
   before=$(git -C "$repo" rev-parse HEAD)
+  refs_before=$(git -C "$repo" show-ref)
+  branch_tip=$(printf 'Same-named branch history\n' |
+    git --git-dir="$UPSTREAM/bar" commit-tree "$tip^{tree}" -p "$tip")
+  git --git-dir="$UPSTREAM/bar" update-ref "refs/heads/$name" "$branch_tip"
+  cp "$repo/.git/FETCH_HEAD" "$TMP/ambiguous-fetch-head"
+  for operation in fetch pull push; do
+    status=0
+    (cd "$repo" && git subrepo "$operation" shared) > "$TMP/ambiguous-operation" 2>&1 || status=$?
+    is "$status" 1 "$mode refuses $operation with an ambiguous plain selector"
+    like "$(cat "$TMP/ambiguous-operation")" 'ambiguous|Ambiguous' 'selector ambiguity is diagnosed explicitly'
+    is "$(git -C "$repo" show-ref)" "$refs_before" 'ambiguity refusal preserves local refs'
+    unchanged=0
+    cmp "$repo/.git/FETCH_HEAD" "$TMP/ambiguous-fetch-head" > /dev/null 2>&1 || unchanged=$?
+    is "$unchanged" 0 'ambiguity refusal preserves FETCH_HEAD bytes'
+    is "$(git -C "$repo" rev-parse HEAD)" "$before" 'ambiguity refusal preserves project HEAD'
+    is "$(git -C "$repo" status --porcelain)" "" 'ambiguity refusal preserves project files'
+  done
   status=0
-  (cd "$repo" && git subrepo push shared) > "$TMP/ambiguous-push" 2>&1 || status=$?
-  is "$status" 1 "$mode refuses publication with an ambiguous plain selector"
-  like "$(cat "$TMP/ambiguous-push")" 'ambiguous|Ambiguous' 'selector ambiguity is diagnosed explicitly'
-  is "$(git --git-dir="$UPSTREAM/bar" rev-parse "refs/heads/$name")" "$tip" \
+  (cd "$repo" && git subrepo clone "$UPSTREAM/bar" refused \
+    --history="$mode" --branch="$name") > "$TMP/ambiguous-clone" 2>&1 || status=$?
+  is "$status" 1 "$mode refuses cloning an ambiguous plain selector"
+  test-exists "!$repo/refused/"
+  is "$(git --git-dir="$UPSTREAM/bar" rev-parse "refs/heads/$name")" "$branch_tip" \
     'ambiguous selector refusal preserves the advertised branch'
   is "$(git --git-dir="$UPSTREAM/bar" rev-parse "refs/tags/$name")" "$tip" \
     'ambiguous selector refusal preserves the advertised tag'
-  is "$(git -C "$repo" rev-parse HEAD)" "$before" 'ambiguous refusal preserves project HEAD'
+  status=0
+  (cd "$repo" && git subrepo fetch shared --branch="refs/tags/$name") \
+    > "$TMP/explicit-fetch" 2>&1 || status=$?
+  is "$status" 0 "$mode still permits an explicit tag selector alongside a same-named branch"
+  is "$(git -C "$repo" rev-parse refs/subrepo/shared/fetch)" "$tip" \
+    'explicit tag fetch selects the tag commit rather than the same-named branch'
 done
 
 git clone -q --bare "$UPSTREAM/bar" "$UPSTREAM/hostile-head.git"

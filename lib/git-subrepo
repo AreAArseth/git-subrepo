@@ -1117,7 +1117,10 @@ subrepo:fetch() {
   fi
 
   o "Fetch the upstream: $subrepo_remote ($subrepo_branch)."
-  git:with-safe-protocols RUN git fetch --no-tags --quiet --refmap= -- "$subrepo_remote" "$subrepo_branch"
+  local upstream_ref
+  upstream_ref=$(upstream-ref) ||
+    error "Could not resolve the upstream fetch selector. Check the tracking settings and remote."
+  git:with-safe-protocols RUN git fetch --no-tags --quiet --refmap= -- "$subrepo_remote" "$upstream_ref"
   OK || return
 
   o "Get the upstream subrepo HEAD commit."
