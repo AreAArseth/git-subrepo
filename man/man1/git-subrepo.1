@@ -324,6 +324,15 @@ publication finishes, so an exact retry does not import the same changes
 twice. New incoming changes still need integration. If the parent or shared
 worktree has changed since interruption, the retry preserves that work and
 stops rather than discarding it.
+.PP
+Recovery files and saved messages are bound to prepared Git blobs under
+worktree-specific refs. Missing or altered records are refused before checkout
+or commit. Pending publications must match the shared snapshot and its
+reconstructed export before pushing. Preserve the recovery files and refs
+together; older records without this binding require maintainer inspection.
+These integrity checks are not authentication against someone who can also
+replace Git objects, refs, or hooks. Restrict write access to Git administration
+directories.
 .SS "Tracking and Signatures"
 .IX Subsection "Tracking and Signatures"
 The complete \f(CW\*(C`[subrepo\-v2]\*(C'\fR section records metadata format 2, rewrite format
@@ -331,6 +340,15 @@ The complete \f(CW\*(C`[subrepo\-v2]\*(C'\fR section records metadata format 2, 
 state. Newly initialized directories remain \fIunpublished\fR until their first
 push; no upstream \s-1ID\s0 is invented. Managed history fields cannot be changed
 with \f(CW\*(C`config \-\-force\*(C'\fR.
+.PP
+Both tracking layouts require regular \f(CW\*(C`.gitrepo\*(C'\fR files and real directory
+components, not symbolic links. Recorded commit IDs must be full hexadecimal
+object IDs when present. Remotes must be nonempty and cannot begin with \f(CW\*(C`\-\*(C'\fR.
+The upstream setting accepts a plain branch or tag name, or an explicit
+\&\f(CW\*(C`refs/tags/<tag>\*(C'\fR selector, not an option, other full ref name,
+wildcard, or destination-bearing refspec. Fetching does not update unrelated
+local or remote-tracking refs. Recovery commands quote their arguments;
+preserve that quoting when copying them into a shell.
 .PP
 Rewriting preserves author/committer fields and message bytes but changes
 commit IDs. Original signatures and merge-tag signatures are removed from
@@ -942,6 +960,10 @@ Cygwin \*(-- <https://www.cygwin.com/>
 Let us know if there are others that it works (or doesn't work) in.
 .SH "Testing"
 .IX Header "Testing"
+The test harness isolates \s-1HOME, XDG\s0 configuration, and global/system Git
+configuration on every supported Git version. It does not disable \s-1TLS\s0
+certificate verification or change the developer's real Git configuration.
+.PP
 The \f(CW\*(C`git\-subrepo\*(C'\fR repository comes with a extensive test suite. You can
 run it with:
 .PP
@@ -954,13 +976,13 @@ and Git configuration. Use \f(CW\*(C`make test jobs=1\*(C'\fR to run serially, o
 another positive number to adjust concurrency. The same setting applies to
 Docker test targets. \f(CW\*(C`make CI_TEST\*(C'\fR keeps the oldest Bash/Git combination serial
 because old Git can stall under emulated parallel execution; the newest uses
-\f(CW\*(C`jobs\*(C'\fR. Override the oldest separately with \f(CW\*(C`make CI_TEST legacy_jobs=2\*(C'\fR.
+\&\f(CW\*(C`jobs\*(C'\fR. Override the oldest separately with \f(CW\*(C`make CI_TEST legacy_jobs=2\*(C'\fR.
 .PP
 For per-file timings or a focused test:
 .PP
 .Vb 2
-\&    make test prove=--timer
-\&    make test test=test/history-rebase-resolution.t
+\&    make test prove=\-\-timer
+\&    make test test=test/history\-rebase\-resolution.t
 .Ve
 .PP
 Without \f(CW\*(C`make\*(C'\fR on your system:

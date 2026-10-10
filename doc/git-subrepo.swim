@@ -218,6 +218,15 @@ exact retry does not import the same changes twice. New incoming changes still
 need integration. If the parent or shared worktree has changed since interruption,
 the retry preserves that work and stops rather than discarding it.
 
+Recovery files and saved messages are bound to prepared Git blobs under
+worktree-specific refs. Missing or altered records are refused before checkout
+or commit. Pending publications must match the shared snapshot and its
+reconstructed export before pushing. Preserve the recovery files and refs
+together; older records without this binding require maintainer inspection.
+These integrity checks are not authentication against someone who can also
+replace Git objects, refs, or hooks. Restrict write access to Git administration
+directories.
+
 == Tracking and Signatures
 
 The complete `[subrepo-v2]` section records metadata format 2, rewrite format 1,
@@ -225,6 +234,15 @@ the shared path, original upstream ID, imported ID, and synchronization state.
 Newly initialized directories remain /unpublished/ until their first push; no
 upstream ID is invented. Managed history fields cannot be changed with `config
 --force`.
+
+Both tracking layouts require regular `.gitrepo` files and real directory
+components, not symbolic links. Recorded commit IDs must be full hexadecimal
+object IDs when present. Remotes must be nonempty and cannot begin with `-`.
+The upstream setting accepts a plain branch or tag name, or an explicit
+`refs/tags/<tag>` selector, not an option, other full ref name, wildcard, or
+destination-bearing refspec. Fetching does not update unrelated local or
+remote-tracking refs. Recovery commands quote their arguments; preserve that
+quoting when copying them into a shell.
 
 Rewriting preserves author/committer fields and message bytes but changes commit
 IDs. Original signatures and merge-tag signatures are removed from rewritten
@@ -820,6 +838,10 @@ This command is known to work in these Windows environments:
 Let us know if there are others that it works (or doesn't work) in.
 
 = Testing
+
+The test harness isolates HOME, XDG configuration, and global/system Git
+configuration on every supported Git version. It does not disable TLS
+certificate verification or change the developer's real Git configuration.
 
 The `git-subrepo` repository comes with a extensive test suite. You can run it
 with:

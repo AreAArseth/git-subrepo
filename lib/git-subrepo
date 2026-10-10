@@ -284,6 +284,7 @@ command:init() {
   fi
   local remote=${subrepo_remote:=none}
   local branch=${subrepo_branch:=$default_branch}
+  validate-upstream "$remote" "$branch"
 
   # Init new subrepo from the subdir:
   subrepo:init
@@ -593,6 +594,11 @@ command:config() {
       error "Not a valid method. Valid options are 'merge' or 'rebase'."
     fi
   fi
+  case "$config_option" in
+    remote) validate-upstream "$config_value" "$subrepo_branch" ;;
+    branch) validate-upstream "$subrepo_remote" "$config_value" ;;
+    commit) history:valid-oid "$config_value" ;;
+  esac
 
   RUN git config --file="$gitrepo" "subrepo.$config_option" "$config_value"
   say "Subrepo '$subdir' option '$config_option' set to '$config_value'."
@@ -690,8 +696,14 @@ subrepo:clone() {
       read-gitrepo-file
       CALL subrepo:fetch
     else
-      CALL subrepo:fetch
       read-gitrepo-file
+      if [[ -z $override_branch ]]; then
+        o "Determine the upstream head branch."
+        get-upstream-head-branch
+        subrepo_branch=$output
+        override_branch=$output
+      fi
+      CALL subrepo:fetch
     fi
     o "Check if we already are up to date."
     if [[ $upstream_head_commit == "$subrepo_commit" ]]; then
@@ -706,13 +718,6 @@ subrepo:clone() {
     if [[ $history_mode != prefixed ]]; then
       o "Remove the old subdir."
       RUN git rm -r -- "$subdir"
-
-      if [[ -z $override_branch ]]; then
-        o "Determine the upstream head branch."
-        get-upstream-head-branch
-        subrepo_branch="$output"
-        override_branch="$output" # Force update of the branch in .gitrepo
-      fi
     fi
   else
     assert-subdir-empty
@@ -827,16 +832,6 @@ subrepo:retarget() {
     error "Can't retarget subrepo. Remote is 'none' in '$gitrepo'."
   fi
 
-  if $update_wanted; then
-    o "Update .gitrepo remote/branch for $subdir."
-    if [[ $override_remote ]]; then
-      RUN git config --file="$gitrepo" subrepo.remote "$subrepo_remote"
-    fi
-    if [[ $override_branch ]]; then
-      RUN git config --file="$gitrepo" subrepo.branch "$subrepo_branch"
-    fi
-  fi
-
   CALL subrepo:fetch
 
   local branch_name=subrepo/$subref
@@ -865,11 +860,21 @@ subrepo:retarget() {
     worktree_created=true
   fi
 
+  if $update_wanted; then
+    o "Update .gitrepo remote/branch for $subdir."
+    if [[ $override_remote ]]; then
+      RUN git config --file="$gitrepo" subrepo.remote "$subrepo_remote"
+    fi
+    if [[ $override_branch ]]; then
+      RUN git config --file="$gitrepo" subrepo.branch "$subrepo_branch"
+    fi
+  fi
+
   cd "$worktree"
 
   FAIL=false OUT=true RUN git rev-parse -q --verify MERGE_HEAD
   if OK; then
-    say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $subdir"
+    say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $(printf '%q' "$subdir")"
     if $update_wanted && [[ $override_branch || $override_remote ]]; then
       say "git-subrepo: '$subdir/.gitrepo' was updated. Commit it in $start_pwd before rerunning retarget."
     fi
@@ -892,7 +897,7 @@ subrepo:retarget() {
       say "The \"git rebase\" command failed:"
       say
       say "  ${output//$'\n'/$'\n'  }"
-      say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $subdir"
+      say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $(printf '%q' "$subdir")"
       if $update_wanted && [[ $override_branch || $override_remote ]]; then
         say "git-subrepo: '$subdir/.gitrepo' was updated. Commit it in $start_pwd before rerunning retarget."
       fi
@@ -907,7 +912,7 @@ subrepo:retarget() {
       say "The \"git merge\" command failed:"
       say
       say "  ${output//$'\n'/$'\n'  }"
-      say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $subdir"
+      say "git-subrepo: Merge conflicts detected in $worktree. Resolve, commit the merge, then rerun: git subrepo retarget $(printf '%q' "$subdir")"
       if $update_wanted && [[ $override_branch || $override_remote ]]; then
         say "git-subrepo: '$subdir/.gitrepo' was updated. Commit it in $start_pwd before rerunning retarget."
       fi
@@ -921,7 +926,7 @@ subrepo:retarget() {
   cd "$start_pwd"
 
   o "Push branch '$branch_name' to '$subrepo_remote' ($subrepo_branch)."
-  RUN git push "$subrepo_remote" "$branch_name":"$subrepo_branch"
+  RUN git push -- "$subrepo_remote" "$branch_name:$(upstream-ref)"
 
   o "Create ref '$refs_subrepo_branch' for branch '$branch_name'."
   git:make-ref "$refs_subrepo_branch" "$branch_name"
@@ -1059,7 +1064,7 @@ subrepo:push() {
 
   o "Push$force branch '$branch_name' to '$subrepo_remote' ($subrepo_branch)."
   # shellcheck disable=2086
-  RUN git push$force "$subrepo_remote" "$branch_name":"$subrepo_branch"
+  RUN git push$force -- "$subrepo_remote" "$branch_name:$(upstream-ref)"
 
   o "Create ref '$refs_subrepo_push' for branch '$branch_name'."
   git:make-ref "$refs_subrepo_push" "$branch_name"
@@ -1090,12 +1095,13 @@ subrepo:push() {
 
 # Fetch the subrepo's remote branch content:
 subrepo:fetch() {
+  validate-upstream "$subrepo_remote" "$subrepo_branch"
   if [[ $subrepo_remote == none ]]; then
     error "Can't fetch subrepo. Remote is 'none' in '$subdir/.gitrepo'."
   fi
 
   o "Fetch the upstream: $subrepo_remote ($subrepo_branch)."
-  RUN git fetch --no-tags --quiet "$subrepo_remote" "$subrepo_branch"
+  RUN git fetch --no-tags --quiet --refmap= -- "$subrepo_remote" "$subrepo_branch"
   OK || return
 
   o "Get the upstream subrepo HEAD commit."
@@ -1142,7 +1148,7 @@ subrepo:branch() {
             This is usually caused by a rebase affecting that commit. \n \
             To recover set the subrepo parent in '$gitrepo'\n \
             to '$prev_merge_point' \n \
-            and validate the subrepo by comparing with 'git subrepo branch $subdir'"
+            and validate the subrepo by comparing with 'git subrepo branch $(printf '%q' "$subdir")'"
     fi
 
     local prev_commit=
@@ -1186,6 +1192,7 @@ subrepo:branch() {
       fi
 
       local gitrepo_commit=$output
+      history:valid-oid "$gitrepo_commit"
       o ".gitrepo reference commit: $gitrepo_commit"
 
       # Check for rebase. The same reference commit repeats across most of the
@@ -1195,7 +1202,7 @@ subrepo:branch() {
         o "Check for rebase"
         if ! git:commit-in-rev-list "$gitrepo_commit" "$refs_subrepo_fetch"; then
           error "Local history is not contained in upstream '$subrepo_remote' ($subrepo_branch).
-If you recently changed .gitrepo remote/branch, run: git subrepo retarget $subdir"
+If you recently changed .gitrepo remote/branch, run: git subrepo retarget $(printf '%q' "$subdir")"
         fi
         checked_gitrepo_commit=$gitrepo_commit
       fi
@@ -1251,7 +1258,13 @@ If you recently changed .gitrepo remote/branch, run: git subrepo retarget $subdi
     o "No parent setting, use the subdir content."
     RUN git branch "$branch" HEAD
     TTY=true FAIL=false RUN git filter-branch -f --subdirectory-filter \
-      "$subref" "$branch"
+      "$subdir" -- "$branch"
+    if ! OK; then
+      local failure=$output
+      RUN git branch -D "$branch"
+      error "Could not extract shared history for '$subdir/'. Nothing was pushed.
+$failure"
+    fi
   fi
 
   o "Remove the .gitrepo file from $first_gitrepo_commit..$branch"
@@ -1259,8 +1272,10 @@ If you recently changed .gitrepo remote/branch, run: git subrepo retarget $subdi
   [[ $first_gitrepo_commit ]] && filter=$first_gitrepo_commit..$branch
   # An index filter never touches the filesystem, unlike a tree filter which
   # checks out every tree in the range just to delete one file:
-  FAIL=false RUN git filter-branch -f --prune-empty --index-filter \
+  FAIL=true RUN git filter-branch -f --prune-empty --index-filter \
     "git rm --cached -q --ignore-unmatch .gitrepo" -- "$filter" --first-parent
+  [[ $(git rev-parse "$branch^{tree}") == "$(history:tree HEAD)" ]] ||
+    error "The extracted branch does not match '$subdir/'. Nothing was pushed."
 
   git:create-worktree "$branch"
 
@@ -1286,6 +1301,13 @@ subrepo:commit() {
         "Can't commit: '$subrepo_commit_ref' doesn't contain upstream HEAD."
     fi
   fi
+
+  local tracking_entry
+  tracking_entry=$(git ls-tree "$subrepo_commit_ref" -- .gitrepo)
+  if [[ $tracking_entry && ! $tracking_entry =~ ^100(644|755)\ blob\  ]]; then
+    error "The incoming tracking file for '$subdir/' must be a regular file, not a symbolic link or directory."
+  fi
+  validate-subrepo-path
 
   if git ls-files -- "$subdir" | grep -q .; then
     o "Remove old content of the subdir."
@@ -1403,7 +1425,7 @@ subrepo:status() {
     echo "  Remote URL:      $subrepo_remote"
     [[ $upstream_head_commit ]] &&
       echo "  Upstream Ref:    $upstream_head_commit"
-    echo "  Tracking Branch: $subrepo_branch"
+    printf '  Tracking Branch: %q\n' "$subrepo_branch"
     if [[ -n $subrepo_commit ]]; then
       if git:rev-exists "$subrepo_commit"; then
         echo "  Pulled Commit:   $(git rev-parse --short "$subrepo_commit")"
@@ -1793,14 +1815,18 @@ No files or refs were changed."
       fi
     fi
     [[ ! $history_option || $history_option == "$history_mode" ]] ||
-      error "Changing history for '$subdir/' requires 'git subrepo migrate $subdir', not replacement."
+      error "Changing history for '$subdir/' requires 'git subrepo migrate $(printf '%q' "$subdir")', not replacement."
   else
     history_mode=${history_option:-prefixed}
     history_state=unpublished
     history_prefix=$subdir
     history_rewrite=1
   fi
+  if [[ $command != init ]]; then
+    validate-upstream "$subrepo_remote" "$subrepo_branch" true
+  fi
   encode-subdir
+  git:validate-worktree-path
 
   if ! $force_wanted; then
     o "Check for worktree with branch subrepo/$subref"
@@ -1829,7 +1855,7 @@ to remove the worktree."
       else
         error "There is already a worktree with branch subrepo/$subdir.
 Use the --force flag to override this check or remove the worktree with
-1. rm -rf $_worktree
+1. rm -rf -- $(printf '%q' "$_worktree")
 2. git worktree prune
 "
       fi
@@ -1895,6 +1921,53 @@ check-and-normalize-subdir() {
   subdir=${subdir#./}
   subdir=${subdir%/}
   [[ $subdir != *//* ]] || subdir=$(tr -s / <<< "$subdir")
+  validate-subrepo-path
+}
+
+validate-subrepo-path() {
+  [[ $subdir && $subdir != /* && $subdir != . && $subdir != ./* &&
+     $subdir != */./* && $subdir != */. &&
+     $subdir != .. && $subdir != ../* &&
+     $subdir != */../* && $subdir != */.. && $subdir != *$'\n'* ]] ||
+    error "Use a shared directory inside this project, without '.' or '..' path segments or newlines."
+  local component current='' remaining=$subdir
+  while [[ $remaining ]]; do
+    component=${remaining%%/*}
+    [[ ${component,,} != .git ]] ||
+      error "The Git administration directory cannot be used as a shared directory."
+    current=${current:+$current/}$component
+    [[ ! -L $current ]] ||
+      error "'$current' is a symbolic link. Use a real project directory; no files were changed."
+    if [[ $remaining == */* ]]; then remaining=${remaining#*/}; else remaining=; fi
+  done
+  [[ ! -L $subdir/.gitrepo &&
+     ( ! -e $subdir/.gitrepo || -f $subdir/.gitrepo ) ]] ||
+    error "The tracking file '$subdir/.gitrepo' must be a regular file, not a symbolic link or directory."
+}
+
+validate-upstream() {
+  local remote=$1 branch=$2 allow_missing_branch=${3:-false}
+  [[ $remote && $remote != -* && $remote != *$'\n'* ]] ||
+    error "Invalid upstream remote in the tracking settings for '$subdir/'."
+  if [[ ! $branch ]] && $allow_missing_branch; then
+    return 0
+  fi
+  if [[ $branch == refs/tags/* ]] && git check-ref-format "$branch" > /dev/null; then
+    return 0
+  fi
+  if ! { [[ $branch && $branch != -* && $branch != +* && $branch != refs/* &&
+     $branch != *$'\n'* && $branch != *'@{'* ]] &&
+    git check-ref-format --branch "$branch" > /dev/null; }; then
+    error "Invalid upstream branch in the tracking settings for '$subdir/': use a plain branch name, not a refspec or option."
+  fi
+}
+
+upstream-ref() {
+  if [[ $subrepo_branch == refs/tags/* ]]; then
+    printf '%s\n' "$subrepo_branch"
+  else
+    printf 'refs/heads/%s\n' "$subrepo_branch"
+  fi
 }
 
 # Determine the correct subdir path to use:
@@ -2003,6 +2076,7 @@ encode-subdir() {
 # Set subdir and gitrepo vars:
 read-gitrepo-file() {
   gitrepo=$subdir/.gitrepo
+  validate-subrepo-path
 
   if [[ ! -f $gitrepo ]]; then
     error "No '$gitrepo' file."
@@ -2043,16 +2117,21 @@ read-gitrepo-file() {
     join_method=merge
   fi
 
-  if [[ -z $subrepo_parent ]]; then
-    FAIL=false \
-      SAY=false OUT=true RUN git config --file="$gitrepo" subrepo.former
-    subrepo_former=$output
-  fi
+  FAIL=false \
+    SAY=false OUT=true RUN git config --file="$gitrepo" subrepo.former
+  subrepo_former=$output
+  validate-upstream "$subrepo_remote" "$subrepo_branch"
+  local oid
+  for oid in "$subrepo_commit" "$subrepo_parent" "$subrepo_former"; do
+    [[ ! $oid ]] || history:valid-oid "$oid"
+  done
 }
 
 
 # Update the subdir/.gitrepo state file:
 update-gitrepo-file() {
+  validate-subrepo-path
+  validate-upstream "$subrepo_remote" "$subrepo_branch"
   if [[ $history_mode == prefixed ]]; then
     history:write "$gitrepo"
     RUN git add -f -- "$gitrepo"
@@ -2271,10 +2350,11 @@ add-subrepo() {
 # Determine the upstream's default head branch:
 get-upstream-head-branch() {
   local remotes branch
-  OUT=true RUN git ls-remote --symref "$subrepo_remote"
+  validate-upstream "$subrepo_remote" "" true
+  OUT=true RUN git ls-remote --symref -- "$subrepo_remote"
   remotes=$output
   [[ $remotes ]] ||
-    error "Failed to 'git ls-remote --symref $subrepo_remote'."
+    error "Failed to 'git ls-remote --symref -- $(printf '%q' "$subrepo_remote")'."
 
   # 'ref: refs/heads/master  HEAD'
   branch=$(
@@ -2286,6 +2366,7 @@ get-upstream-head-branch() {
   [[ $branch =~ refs/heads/ ]] ||
     error "Problem finding remote default head branch."
   output=${branch#refs/heads/}
+  validate-upstream "$subrepo_remote" "$output"
 }
 
 # Commit msg for an action commit:
@@ -2395,6 +2476,13 @@ get-command-info() {
 #------------------------------------------------------------------------------
 
 error-join() {
+  local quoted_subdir quoted_worktree quoted_start quoted_branch quoted_file quoted_gitrepo quoted_message
+  printf -v quoted_subdir '%q' "$subdir"
+  printf -v quoted_worktree '%q' "$worktree"
+  printf -v quoted_start '%q' "$start_pwd"
+  printf -v quoted_gitrepo '%q' "$subdir/.gitrepo"
+  printf -v quoted_file '%q' "$commit_msg_file"
+  printf -v quoted_message '%q' "Retarget $subdir to $subrepo_remote ($subrepo_branch)"
   cat <<...
 
 You will need to finish the $command by hand. A new working tree has been
@@ -2403,7 +2491,7 @@ shown in the output above.
 
 This is the common conflict resolution workflow:
 
-  1. cd $worktree
+  1. cd $quoted_worktree
   2. Resolve the conflicts (see "git status").
   3. "git add" the resolved files.
 ...
@@ -2420,33 +2508,34 @@ This is the common conflict resolution workflow:
 
   cat <<...
   5. If there are more conflicts, restart at step 2.
-  6. cd $start_pwd
+  6. cd $quoted_start
 ...
-  local branch_name=${branch:=subrepo/$subdir}
+  local branch_name=${branch:-subrepo/$subref}
+  printf -v quoted_branch '%q' "$branch_name"
   if [[ $command == push ]]; then
     cat <<...
-  7. git subrepo push $subdir $branch_name
+  7. git subrepo push -- $quoted_subdir $quoted_branch
 ...
   else
     if [[ $command == retarget ]]; then
       if $update_wanted && [[ $override_branch || $override_remote ]]; then
     cat <<...
-  7. git add $subdir/.gitrepo
-  8. git commit -m "Retarget $subdir to $subrepo_remote ($subrepo_branch)"
-  9. git subrepo retarget $subdir
+  7. git add -- $quoted_gitrepo
+  8. git commit -m $quoted_message
+  9. git subrepo retarget -- $quoted_subdir
 ...
       else
     cat <<...
-  7. git subrepo retarget $subdir
+  7. git subrepo retarget -- $quoted_subdir
 ...
       fi
     elif [[ $commit_msg_file ]]; then
     cat <<...
-  7. git subrepo commit --file=$commit_msg_file $subdir
+  7. git subrepo commit --file=$quoted_file -- $quoted_subdir
 ...
     else
     cat <<...
-  7. git subrepo commit $subdir
+  7. git subrepo commit -- $quoted_subdir
 ...
     fi
   fi
@@ -2456,7 +2545,7 @@ This is the common conflict resolution workflow:
 
 After you have performed the steps above you can push your local changes
 without repeating the rebase by:
-  1. git subrepo push $subdir $branch_name
+  1. git subrepo push -- $quoted_subdir $quoted_branch
 
 ...
   fi
@@ -2466,7 +2555,7 @@ See "git help $join_method" for details.
 
 Alternatively, you can abort the $command and reset back to where you started:
 
-  1. git subrepo clean $subdir
+  1. git subrepo clean -- $quoted_subdir
 
 See "git help subrepo" for more help.
 
@@ -2482,6 +2571,7 @@ git:branch-exists() {
 }
 
 git:rev-exists() {
+  [[ $1 && $1 != -* ]] || return 1
   git rev-list "$1" -1 &> /dev/null
 }
 
@@ -2522,11 +2612,13 @@ git:is_merge_commit() {
 
 git:create-worktree() {
   local branch=$1
+  git:validate-worktree-path
   worktree=$GIT_TMP/$branch
   RUN git worktree add "$worktree" "$branch"
 }
 
 git:remove-worktree() {
+  git:validate-worktree-path
   if [[ ${history_mode:-legacy} == prefixed ]]; then
     history:remove-worktree
     return
@@ -2539,8 +2631,46 @@ git:remove-worktree() {
     cd "$start_pwd"
 
     o "Clean up worktree $worktree"
-    rm -rf "$worktree"
+    rm -rf -- "$worktree"
     RUN git worktree prune
+  fi
+}
+
+git:validate-worktree-path() {
+  local common=${history_common:-} current component remaining="tmp/subrepo/$subref"
+  [[ $subref ]] || return 0
+  if [[ ! $common ]]; then
+    common=$(git rev-parse --git-common-dir)
+    common=$(cd "$common" && pwd -P)
+  fi
+  current=$common
+  while [[ $remaining ]]; do
+    component=${remaining%%/*}
+    [[ $component && $component != . && $component != .. ]] ||
+      error "Invalid shared worktree path. No files were changed."
+    current=$current/$component
+    [[ ! -L $current ]] ||
+      error "The shared worktree path '$current' is a symbolic link. No worktree was inspected or deleted."
+    [[ ! -e $current || -d $current ]] ||
+      error "The shared worktree path '$current' is not a directory. No files were changed."
+    if [[ -d $current ]]; then
+      [[ $(cd "$current" && pwd -P) == "$current" ]] ||
+        error "The shared worktree path resolves outside its expected directory. No files were changed."
+    fi
+    if [[ $remaining == */* ]]; then remaining=${remaining#*/}; else remaining=; fi
+  done
+  if [[ -d $current ]]; then
+    local reported shared observed selected=${branch:-}
+    reported=$(git -C "$current" rev-parse --show-toplevel) ||
+      error "The shared worktree is not a registered Git worktree. Its files were kept."
+    shared=$(git -C "$current" rev-parse --git-common-dir)
+    shared=$(cd "$current" && cd "$shared" && pwd -P)
+    observed=$(git -C "$current" symbolic-ref -q HEAD) || observed=
+    [[ $(cd "$reported" && pwd -P) == "$current" && $shared == "$common" &&
+       ( ! $observed || $observed == "refs/heads/subrepo/$subref" ||
+         ( $command == commit && $observed == "refs/heads/${subrepo_commit_ref:-subrepo/$subref}" ) ||
+         ( $command == push && $selected && $observed == "refs/heads/$selected" ) ) ]] ||
+      error "The shared worktree does not belong to this subrepo. Its files were kept."
   fi
 }
 

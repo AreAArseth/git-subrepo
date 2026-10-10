@@ -24,6 +24,10 @@ subrepo-clone-bar-into-foo
 
 gitrepo=$OWNER/foo/bar/.gitrepo
 test-gitrepo-field branch branch1
+is "$(git --git-dir="$UPSTREAM/bar" show branch1:branch1.txt)" "branch1 change" \
+  'legacy retarget preserves the destination contribution'
+is "$(git --git-dir="$UPSTREAM/bar" ls-tree --name-only branch1 Foo)" "" \
+  'legacy retarget does not publish project-only files'
 
 (
   cd "$OWNER/foo"
