@@ -28,6 +28,9 @@ date:    Fri 9 Oct 2026
 - Preflight shared worktrees before forced replacement; scope nested workflows
   explicitly to legacy history.
 - Clean up test fixtures before capability skips and clarify retarget --all usage.
+- Close the lifetime observer's FIFO before removing operation files on NFS,
+  without releasing locks before Git descendants and cleanup hooks finish.
+- Ignore CDPATH when resolving repository, object and executable symlink paths.
 ---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST

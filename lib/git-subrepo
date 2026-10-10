@@ -14,7 +14,7 @@ export FILTER_BRANCH_SQUELCH_WARNING=1
 # Import Bash+ helper functions:
 SOURCE=${BASH_SOURCE[0]}
 while [[ -h $SOURCE ]]; do
-  DIR=$( cd -P "$( dirname "$SOURCE" )" && pwd )
+  DIR=$( CDPATH='' cd -P -- "$( dirname "$SOURCE" )" && pwd )
   SOURCE=$(readlink "$SOURCE")
   [[ $SOURCE != /* ]] && SOURCE=$DIR/$SOURCE
 done
