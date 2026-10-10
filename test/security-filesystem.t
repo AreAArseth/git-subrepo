@@ -37,7 +37,84 @@ for mode in legacy prefixed; do
   isnt "$status" 0 "$mode refuses a different branch registered at the shared worktree path"
   test-exists "$repo/.git/tmp/subrepo/bar/Foo"
   git -C "$repo" worktree remove "$repo/.git/tmp/subrepo/bar"
+
+  worktree=$repo/.git/tmp/subrepo/bar
+  git -C "$repo" worktree add -q --detach "$worktree" HEAD
+  before=$(git -C "$repo" rev-parse HEAD)
+  status=0
+  (cd "$repo" && git subrepo clean bar --force) > "$TMP/refused" 2>&1 || status=$?
+  is "$status" 1 "$mode refuses a foreign detached worktree even with force"
+  like "$(cat "$TMP/refused")" 'does not belong' 'detached refusal explains the ownership boundary'
+  test-exists "$worktree/Foo"
+  is "$(git -C "$repo" rev-parse HEAD)" "$before" 'detached refusal preserves project HEAD'
+  if [[ -d $worktree ]]; then git -C "$repo" worktree remove "$worktree"; fi
+
+  (cd "$repo" && git subrepo branch bar) > /dev/null
+  git -C "$worktree" checkout -qb rebase-target
+  printf 'incoming\n' > "$worktree/Bar"
+  git -C "$worktree" add Bar
+  git -C "$worktree" commit -qm 'Incoming side of a real rebase'
+  git -C "$worktree" checkout -q subrepo/bar
+  printf 'local\n' > "$worktree/Bar"
+  git -C "$worktree" add Bar
+  git -C "$worktree" commit -qm 'Local side of a real rebase'
+  status=0
+  git -C "$worktree" rebase rebase-target > "$TMP/rebase" 2>&1 || status=$?
+  is "$status" 1 "$mode fixture stops in a real conflicted rebase"
+  status=0
+  (cd "$repo" && git subrepo status bar) > "$TMP/rebase-status" 2>&1 || status=$?
+  is "$status" 0 "$mode recognizes the expected branch during its detached rebase"
+  git -C "$worktree" rebase --abort > /dev/null 2>&1
+  (cd "$repo" && git subrepo clean bar) > /dev/null
 done
+
+for operation in branch clean; do
+  for component in subrepo-owners subrepo-owners/tools subrepo-owners/tools/bar; do
+    label=$operation-${component//\//-}
+    repo=$OWNER/ownership-$label
+    git clone -q "$UPSTREAM/foo" "$repo"
+    (cd "$repo" && git subrepo clone "$UPSTREAM/bar" tools/bar) > /dev/null
+    outside=$TMP/outside-$label
+    mkdir -p "$outside/tools"
+    case "$component" in
+      subrepo-owners) target=$outside/tools/bar; link=$outside ;;
+      subrepo-owners/tools) target=$outside/bar; link=$outside ;;
+      subrepo-owners/tools/bar) target=$outside/owner; link=$target ;;
+    esac
+    if [[ $operation == clean || $component == subrepo-owners/tools/bar ]]; then
+      printf '%s\n\n' "$(git -C "$repo" rev-parse --show-toplevel)" > "$target"
+      cp "$target" "$TMP/original-owner"
+    fi
+    mkdir -p "$(dirname "$repo/.git/$component")"
+    ln -s "$link" "$repo/.git/$component"
+    before=$(git -C "$repo" rev-parse HEAD)
+    status=0
+    (cd "$repo" && git subrepo "$operation" tools/bar) > "$TMP/refused" 2>&1 || status=$?
+    is "$status" 1 "$operation refuses redirected ownership records at $component"
+    like "$(cat "$TMP/refused")" 'symbolic link' 'ownership refusal identifies unsafe paths'
+    if [[ $operation == clean || $component == subrepo-owners/tools/bar ]]; then
+      unchanged=0
+      cmp "$target" "$TMP/original-owner" > /dev/null 2>&1 || unchanged=$?
+      is "$unchanged" 0 'outside ownership content is preserved byte for byte'
+    else
+      test-exists "!$target"
+    fi
+    is "$(git -C "$repo" rev-parse HEAD)" "$before" 'ownership refusal preserves project HEAD'
+    is "$(git -C "$repo" status --porcelain)" "" 'ownership refusal preserves project files'
+  done
+done
+
+repo=$OWNER/ownership-directory
+git clone -q "$UPSTREAM/foo" "$repo"
+(cd "$repo" && git subrepo clone "$UPSTREAM/bar" tools/bar) > /dev/null
+mkdir -p "$repo/.git/subrepo-owners/tools/bar"
+status=0
+(cd "$repo" && git subrepo branch tools/bar) > "$TMP/refused" 2>&1 || status=$?
+is "$status" 1 'a directory cannot be used as an ownership record'
+like "$(cat "$TMP/refused")" 'regular file' 'nonregular ownership records are diagnosed'
+is "$(git -C "$repo" for-each-ref --format='%(refname)' refs/heads/subrepo/tools/bar)" "" \
+  'invalid ownership records are refused before creating a shared branch'
+test-exists "!$repo/.git/tmp/subrepo/tools/bar/"
 
 git clone -q "$UPSTREAM/bar" "$OWNER/symlink-source"
 (

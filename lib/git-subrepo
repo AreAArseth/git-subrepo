@@ -926,7 +926,10 @@ subrepo:retarget() {
   cd "$start_pwd"
 
   o "Push branch '$branch_name' to '$subrepo_remote' ($subrepo_branch)."
-  RUN git push -- "$subrepo_remote" "$branch_name:$(upstream-ref)"
+  local destination
+  destination=$(upstream-ref) ||
+    error "Could not resolve the upstream publication destination. Nothing was pushed."
+  RUN git push -- "$subrepo_remote" "$branch_name:$destination"
 
   o "Create ref '$refs_subrepo_branch' for branch '$branch_name'."
   git:make-ref "$refs_subrepo_branch" "$branch_name"
@@ -1063,8 +1066,11 @@ subrepo:push() {
   "$force_wanted" && force=' --force'
 
   o "Push$force branch '$branch_name' to '$subrepo_remote' ($subrepo_branch)."
+  local destination
+  destination=$(upstream-ref) ||
+    error "Could not resolve the upstream publication destination. Nothing was pushed."
   # shellcheck disable=2086
-  RUN git push$force -- "$subrepo_remote" "$branch_name:$(upstream-ref)"
+  RUN git push$force -- "$subrepo_remote" "$branch_name:$destination"
 
   o "Create ref '$refs_subrepo_push' for branch '$branch_name'."
   git:make-ref "$refs_subrepo_push" "$branch_name"
@@ -1963,11 +1969,27 @@ validate-upstream() {
 }
 
 upstream-ref() {
+  validate-upstream "$subrepo_remote" "$subrepo_branch"
   if [[ $subrepo_branch == refs/tags/* ]]; then
     printf '%s\n' "$subrepo_branch"
-  else
-    printf 'refs/heads/%s\n' "$subrepo_branch"
+    return
   fi
+  local output name head=false tag=false
+  output=$(git ls-remote --refs -- "$subrepo_remote" \
+    "refs/heads/$subrepo_branch" "refs/tags/$subrepo_branch") ||
+    error "Could not resolve the upstream selector. Check the remote and your connection."
+  while IFS=$'\t' read -r _ name; do
+    if [[ $name == "refs/heads/$subrepo_branch" ]]; then
+      head=true
+    elif [[ $name == "refs/tags/$subrepo_branch" ]]; then
+      tag=true
+    fi
+  done <<< "$output"
+  if $head && $tag; then
+    error "Ambiguous upstream selector '$subrepo_branch': both a branch and a tag exist. Use an unambiguous name or an explicit refs/tags/<tag> selector."
+  fi
+  if $tag; then printf 'refs/tags/%s\n' "$subrepo_branch"
+  else printf 'refs/heads/%s\n' "$subrepo_branch"; fi
 }
 
 # Determine the correct subdir path to use:
@@ -2643,6 +2665,9 @@ git:validate-worktree-path() {
     common=$(git rev-parse --git-common-dir)
     common=$(cd "$common" && pwd -P)
   fi
+  if [[ ${history_mode:-legacy} == prefixed ]]; then
+    history:validate-owner-path "$common"
+  fi
   current=$common
   while [[ $remaining ]]; do
     component=${remaining%%/*}
@@ -2666,8 +2691,20 @@ git:validate-worktree-path() {
     shared=$(git -C "$current" rev-parse --git-common-dir)
     shared=$(cd "$current" && cd "$shared" && pwd -P)
     observed=$(git -C "$current" symbolic-ref -q HEAD) || observed=
+    if [[ ! $observed ]]; then
+      local state directory
+      for state in rebase-merge rebase-apply; do
+        directory=$(git -C "$current" rev-parse --git-path "$state")
+        [[ $directory == /* ]] || directory=$current/$directory
+        if [[ -d $directory && ! -L $directory &&
+              -f $directory/head-name && ! -L $directory/head-name ]]; then
+          IFS= read -r observed < "$directory/head-name" || observed=
+          break
+        fi
+      done
+    fi
     [[ $(cd "$reported" && pwd -P) == "$current" && $shared == "$common" &&
-       ( ! $observed || $observed == "refs/heads/subrepo/$subref" ||
+       ( $observed == "refs/heads/subrepo/$subref" ||
          ( $command == commit && $observed == "refs/heads/${subrepo_commit_ref:-subrepo/$subref}" ) ||
          ( $command == push && $selected && $observed == "refs/heads/$selected" ) ) ]] ||
       error "The shared worktree does not belong to this subrepo. Its files were kept."

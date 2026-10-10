@@ -93,6 +93,87 @@ for mode in legacy prefixed; do
     "$mode does not turn a tag selector into an unrelated branch"
 done
 
+git -C "$OWNER/bar" tag -a annotated-security -m 'Annotated selector fixture'
+git -C "$OWNER/bar" push -q origin refs/tags/annotated-security
+repo=$OWNER/annotated-selector
+git clone -q "$UPSTREAM/foo" "$repo"
+(cd "$repo" && git subrepo clone "$UPSTREAM/bar" shared \
+  --branch=refs/tags/annotated-security) > /dev/null
+before=$(git -C "$repo" rev-parse HEAD)
+tag_before=$(git --git-dir="$UPSTREAM/bar" rev-parse refs/tags/annotated-security)
+status=0
+(cd "$repo" && git subrepo push shared) > "$TMP/annotated-noop" 2>&1 || status=$?
+is "$status" 0 'unchanged annotated tag tracking is an up-to-date push'
+is "$(git -C "$repo" rev-parse HEAD)" "$before" 'annotated tag no-op preserves project HEAD'
+status=0
+(cd "$repo" && git subrepo retarget shared --branch=refs/tags/annotated-security --dry-run) \
+  > "$TMP/annotated-preview" 2>&1 || status=$?
+is "$status" 0 'annotated tag retarget preview compares the peeled commit'
+is "$(git --git-dir="$UPSTREAM/bar" rev-parse refs/tags/annotated-security)" "$tag_before" \
+  'annotated tag operations preserve the tag object itself'
+
+for mode in legacy prefixed; do
+  for kind in lightweight annotated; do
+    name=$mode-$kind-security
+    if [[ $kind == annotated ]]; then
+      git -C "$OWNER/bar" tag -a "$name" -m 'Plain annotated selector fixture'
+    else
+      git -C "$OWNER/bar" tag "$name"
+    fi
+    git -C "$OWNER/bar" push -q origin "refs/tags/$name"
+    repo=$OWNER/plain-$name
+    git clone -q "$UPSTREAM/foo" "$repo"
+    (cd "$repo" && git subrepo clone "$UPSTREAM/bar" shared \
+      --history="$mode" --branch="$name") > /dev/null
+    before=$(git -C "$repo" rev-parse HEAD)
+    tag_before=$(git --git-dir="$UPSTREAM/bar" rev-parse "refs/tags/$name")
+    status=0
+    (cd "$repo" && git subrepo push shared) > "$TMP/plain-noop" 2>&1 || status=$?
+    is "$status" 0 "$mode accepts an unchanged plain $kind tag selector"
+    is "$(git -C "$repo" rev-parse HEAD)" "$before" 'plain tag no-op preserves project HEAD'
+    if [[ $mode == legacy ]]; then
+      printf '%s\n' "$name" > "$repo/shared/plain-tag-change"
+      git -C "$repo" add shared/plain-tag-change
+      git -C "$repo" commit -qm 'Shared contribution on a plain tag selector'
+      status=0
+      (cd "$repo" && git subrepo push shared --force) > "$TMP/plain-push" 2>&1 || status=$?
+      is "$status" 0 "legacy can explicitly force publication to a plain $kind tag"
+      is "$(git --git-dir="$UPSTREAM/bar" show "refs/tags/$name:plain-tag-change" 2>/dev/null)" \
+        "$name" 'forced plain tag publication updates the selected tag'
+    else
+      status=0
+      (cd "$repo" && git subrepo retarget shared --branch="$name" --dry-run) \
+        > "$TMP/plain-preview" 2>&1 || status=$?
+      is "$status" 0 "prefixed preview accepts a plain $kind tag"
+      is "$(git --git-dir="$UPSTREAM/bar" rev-parse "refs/tags/$name")" "$tag_before" \
+        'plain tag preview preserves the original tag object'
+    fi
+    is "$(git --git-dir="$UPSTREAM/bar" for-each-ref --format='%(refname)' "refs/heads/$name")" "" \
+      'plain tag operations never create an unrelated branch'
+  done
+
+  name=ambiguous-$mode-security
+  tip=$(git -C "$OWNER/bar" rev-parse HEAD)
+  git -C "$OWNER/bar" push -q origin "$tip:refs/heads/$name" "$tip:refs/tags/$name"
+  repo=$OWNER/$name
+  git clone -q "$UPSTREAM/foo" "$repo"
+  (cd "$repo" && git subrepo clone "$UPSTREAM/bar" shared \
+    --history="$mode" --branch="$name") > /dev/null
+  printf 'ambiguous contribution\n' > "$repo/shared/ambiguous-change"
+  git -C "$repo" add shared/ambiguous-change
+  git -C "$repo" commit -qm 'Ambiguous selector contribution'
+  before=$(git -C "$repo" rev-parse HEAD)
+  status=0
+  (cd "$repo" && git subrepo push shared) > "$TMP/ambiguous-push" 2>&1 || status=$?
+  is "$status" 1 "$mode refuses publication with an ambiguous plain selector"
+  like "$(cat "$TMP/ambiguous-push")" 'ambiguous|Ambiguous' 'selector ambiguity is diagnosed explicitly'
+  is "$(git --git-dir="$UPSTREAM/bar" rev-parse "refs/heads/$name")" "$tip" \
+    'ambiguous selector refusal preserves the advertised branch'
+  is "$(git --git-dir="$UPSTREAM/bar" rev-parse "refs/tags/$name")" "$tip" \
+    'ambiguous selector refusal preserves the advertised tag'
+  is "$(git -C "$repo" rev-parse HEAD)" "$before" 'ambiguous refusal preserves project HEAD'
+done
+
 git clone -q --bare "$UPSTREAM/bar" "$UPSTREAM/hostile-head.git"
 tip=$(git --git-dir="$UPSTREAM/hostile-head.git" rev-parse master)
 name="--upload-pack=touch${TMP//\//_}"

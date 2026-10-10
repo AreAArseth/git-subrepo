@@ -244,6 +244,12 @@ destination-bearing refspec. Fetching does not update unrelated local or
 remote-tracking refs. Recovery commands quote their arguments; preserve that
 quoting when copying them into a shell.
 
+Publication resolves plain names against advertised branches and tags. A name
+matching both is refused; use an unambiguous name or an explicit tag selector.
+
+Shared worktree ownership records follow the same filesystem rules. Detached
+shared worktrees must have an active rebase identifying the expected branch.
+
 Rewriting preserves author/committer fields and message bytes but changes commit
 IDs. Original signatures and merge-tag signatures are removed from rewritten
 objects, which are unsigned. Original upstream objects can be verified separately

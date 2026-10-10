@@ -113,14 +113,19 @@ status=0
 (cd "$repo" && git subrepo push tagged) > "$TMP/tag-interrupted" 2>&1 || status=$?
 is "$status" 1 'hook failure interrupts local recording after initial tag publication'
 published=$(git --git-dir="$UPSTREAM/bar" rev-parse refs/tags/recovered)
+git --git-dir="$UPSTREAM/bar" tag -f -a recovered "$published" \
+  -m 'Annotate the already published commit' > /dev/null
+annotated=$(git --git-dir="$UPSTREAM/bar" rev-parse refs/tags/recovered)
 test-exists "$journal"
 is "$(git -C "$repo" rev-parse HEAD)" "$before" 'interrupted tag recording preserves project HEAD'
 git -C "$repo" config --unset core.hooksPath
 status=0
 (cd "$repo" && git subrepo push tagged) > "$TMP/tag-resumed" 2>&1 || status=$?
 is "$status" 0 'tag publication recovery checks the actual selected tag'
-is "$(git --git-dir="$UPSTREAM/bar" rev-parse refs/tags/recovered)" "$published" \
+is "$(git --git-dir="$UPSTREAM/bar" rev-parse 'refs/tags/recovered^{commit}')" "$published" \
   'tag recovery does not republish a different commit'
+is "$(git --git-dir="$UPSTREAM/bar" rev-parse refs/tags/recovered)" "$annotated" \
+  'tag recovery preserves an annotation of the already published commit'
 is "$(git config -f "$repo/tagged/.gitrepo" subrepo-v2.commit)" "$published" \
   'tag recovery records the published commit locally'
 is "$(git config -f "$repo/tagged/.gitrepo" subrepo-v2.branch)" refs/tags/recovered \

@@ -360,6 +360,7 @@ Moving a shared directory is not supported yet. Move it back before synchronizin
 Nested shared repositories are not supported in prefixed history. No project files were changed."
     fi
   done < <(git ls-files -z -- '**/.gitrepo')
+  history:validate-owner-path "$history_common"
   local owner=$history_common/subrepo-owners/$subref
   if [[ ! $command =~ ^(log|status|fetch)$ && -f $owner &&
         $(cat "$owner") != "$(git rev-parse --show-toplevel)" ]]; then
@@ -804,7 +805,7 @@ history:resume-integration() {
   local subrepo_remote='' subrepo_branch='' subrepo_commit='' subrepo_parent=''
   local subrepo_former='' history_prefix='' history_state='' history_mapped=''
   local history_recorded_remote='' history_recorded_branch='' history_rewrite=''
-  local pending remote remote_tip phase
+  local pending remote_tip phase
   check-and-normalize-subdir
   [[ $subdir == "$directory" ]] ||
     error "The prepared recovery directory is not normalized. No project files were changed."
@@ -849,10 +850,8 @@ Your files were kept. Return to that branch before retrying the saved command."
     local candidate branch=${command_arguments[1]:-}
     if [[ $command != push || $all_wanted ]]; then branch=; fi
     candidate=$(history:validate-pending "$pending" "$expected")
-    remote=$subrepo_remote
-    remote_tip=$(git ls-remote -- "$remote" "$(upstream-ref)") ||
+    remote_tip=$(history:remote-tip) ||
       error "The earlier push cannot be checked while the remote is unavailable. Reconnect and retry; your files and recovery record were kept."
-    remote_tip=${remote_tip%%$'\t'*}
     [[ $remote_tip == "$candidate" ]] ||
       error "The shared branch changed after the earlier push. Your files and recovery record were kept; check the upstream with its maintainer before retrying."
   fi
@@ -1126,6 +1125,7 @@ history:export() {
 
 history:branch() {
   local branch=${1:-subrepo/$subref} candidate
+  history:validate-owner-path "$history_common"
   candidate=$(history:export)
   git branch "$branch" "$candidate"
   git:create-worktree "$branch"
@@ -1152,6 +1152,7 @@ Preserve or commit them there before cleanup. No worktree was deleted."
 
 history:remove-worktree() {
   local path=$history_common/tmp/subrepo/$subref
+  history:validate-owner-path "$history_common"
   history:assert-worktree-clean
   if [[ ! -d $path ]]; then
     rm -f "$history_common/subrepo-owners/$subref"
@@ -1275,18 +1276,30 @@ history:push-candidate() {
   printf '%s\n' "$candidate"
 }
 
-history:validate-pending-path() {
-  local current=$history_common component remaining="subrepo-pending/$subref"
+history:validate-record-path() {
+  local relative=$1 label=$2 current=${3:-${history_common:-}}
+  local component remaining=${relative%/*} leaf=${relative##*/}
+  [[ $current == /* && $leaf && $leaf != . && $leaf != .. ]] ||
+    error "The $label path is not inside the Git administration directory. Preserve the record and inspect its path before retrying."
   while [[ $remaining ]]; do
     component=${remaining%%/*}
     current=$current/$component
     [[ $component && $component != . && $component != .. &&
        ! -L $current && ( ! -e $current || -d $current ) ]] ||
-      error "The pending publication path is not a real repository directory. Nothing was pushed."
+      error "The $label path is not a real repository directory; symbolic links are not allowed. Preserve the record and inspect its path before retrying."
     if [[ $remaining == */* ]]; then remaining=${remaining#*/}; else remaining=; fi
   done
-  [[ ! -L $current/push && ( ! -e $current/push || -f $current/push ) ]] ||
-    error "The pending publication record is not a regular file. Nothing was pushed."
+  [[ ! -L $current/$leaf && ( ! -e $current/$leaf || -f $current/$leaf ) ]] ||
+    error "The $label record must be a regular file, not a symbolic link or directory. Preserve the record and inspect its path before retrying."
+}
+
+history:validate-owner-path() {
+  history:validate-record-path "subrepo-owners/$subref" \
+    'shared worktree ownership' "$1"
+}
+
+history:validate-pending-path() {
+  history:validate-record-path "subrepo-pending/$subref/push" 'pending publication'
 }
 
 history:validate-pending() {
@@ -1319,17 +1332,39 @@ history:validate-pending() {
   printf '%s\n' "$candidate"
 }
 
+history:remote-tip() {
+  local ref=${1:-} output oid name tip='' peeled=''
+  validate-upstream "$subrepo_remote" "$subrepo_branch"
+  if [[ ! $ref ]]; then
+    ref=$(upstream-ref) || return
+  fi
+  local selectors=("$ref")
+  [[ $ref != refs/tags/* ]] || selectors+=("$ref^{}")
+  output=$(git ls-remote -- "$subrepo_remote" "${selectors[@]}") || return
+  while IFS=$'\t' read -r oid name; do
+    if [[ $name == "$ref" ]]; then
+      tip=$oid
+    elif [[ $name == "$ref^{}" ]]; then
+      peeled=$oid
+    fi
+  done <<< "$output"
+  tip=${peeled:-$tip}
+  [[ ! $tip ]] || history:valid-oid "$tip"
+  printf '%s\n' "$tip"
+}
+
 history:push() {
   if [[ $command == push ]] && $force_wanted; then
     error "Force-pushing is not supported for prefixed shared history. Pull and resolve incoming changes before pushing; no changes were sent."
   fi
   local pending=$history_common/subrepo-pending/$subref/push
-  local candidate remote_tip snapshot expected publish=true previous_tip prepared
+  local candidate remote_tip snapshot expected publish=true previous_tip prepared destination
   history:validate-pending-path
+  destination=$(upstream-ref) ||
+    error "Could not resolve the upstream publication destination. Nothing was pushed."
   snapshot=$(history:tree HEAD)
-  remote_tip=$(git ls-remote -- "$subrepo_remote" "$(upstream-ref)") ||
+  remote_tip=$(history:remote-tip "$destination") ||
     error "Could not contact the shared repository for '$subdir/'. Check the remote and your connection; nothing was pushed."
-  remote_tip=${remote_tip%%$'\t'*}
   if [[ $remote_tip ]]; then
     subrepo:fetch
   elif [[ $history_state != unpublished && $command != retarget ]]; then
@@ -1382,10 +1417,9 @@ Then retry your push."
   fi
   if $publish; then
     previous_tip=$(git config -f "$pending" push.previous)
-    if ! git push -- "$subrepo_remote" "$candidate:$(upstream-ref)"; then
-      remote_tip=$(git ls-remote -- "$subrepo_remote" "$(upstream-ref)") ||
+    if ! git push -- "$subrepo_remote" "$candidate:$destination"; then
+      remote_tip=$(history:remote-tip "$destination") ||
         error "The push result could not be confirmed. Your files and pending record were kept. Retry this push after reconnecting."
-      remote_tip=${remote_tip%%$'\t'*}
       if [[ $remote_tip != "$candidate" ]]; then
         [[ $remote_tip == "$previous_tip" ]] ||
           error "The shared branch changed while the push was running. Your local changes and pending record were kept; check the upstream before retrying."
@@ -1412,9 +1446,8 @@ history:retarget() {
     history:publish-retarget
     return
   fi
-  remote_tip=$(git ls-remote -- "$subrepo_remote" "$(upstream-ref)") ||
+  remote_tip=$(history:remote-tip) ||
     error "Could not contact the shared repository. Check the remote and your connection; nothing was pushed."
-  remote_tip=${remote_tip%%$'\t'*}
   if [[ $remote_tip ]]; then
     subrepo:fetch
     remote_tip=$upstream_head_commit
@@ -1489,9 +1522,8 @@ history:preview-retarget() {
   local tip path=$history_common/tmp/subrepo/$subref
   printf "Preview retarget of '%s/':\n  From: %s (%s)\n  To:   %s (%s)\n" \
     "$subdir" "$history_recorded_remote" "$history_recorded_branch" "$subrepo_remote" "$subrepo_branch"
-  tip=$(git ls-remote -- "$subrepo_remote" "$(upstream-ref)") ||
+  tip=$(history:remote-tip) ||
     error "Could not check the destination. No files, refs, or tracking settings were changed."
-  tip=${tip%%$'\t'*}
   if [[ ! $tip ]]; then
     printf '  Destination branch does not exist; retarget will create it and publish shared history.\n'
   elif git cat-file -e "$tip^{commit}" 2>/dev/null &&
