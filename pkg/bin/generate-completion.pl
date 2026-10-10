@@ -137,9 +137,9 @@ $options_string && ret=0
 \}
 
 _compadd_subdirs() {
-    local subrepos
-    IFS=\$'\\n' set -A subrepos `git subrepo status -q`
-    compadd -X "subrepos: " \$subrepos
+    local -a subrepos
+    subrepos=("\${(\@f)\$(git subrepo status -q)}")
+    compadd -X "subrepos: " -- "\${subrepos[@]}"
 }
 ...
 }

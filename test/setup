@@ -9,9 +9,12 @@ set -e
 # Set up a temporary home directory for git config
 TEST_HOME=$(mktemp -d)
 export HOME="$TEST_HOME"
+export XDG_CONFIG_HOME="$TEST_HOME/.config"
 TEMP_GIT_CONFIG="$TEST_HOME/.gitconfig"
 export GIT_CONFIG_GLOBAL="$TEMP_GIT_CONFIG"
 export GIT_CONFIG_SYSTEM=/dev/null
+export GIT_CONFIG_NOSYSTEM=1
+: > "$TEMP_GIT_CONFIG"
 
 # Set up minimal git configuration for tests
 setup_git_config() {
@@ -55,7 +58,6 @@ setup_git_config() {
   git config --global color.status false
 
   # Security settings
-  git config --global http.sslverify false
   git config --global receive.advertisePushOptions false
 }
 

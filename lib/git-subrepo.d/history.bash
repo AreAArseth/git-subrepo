@@ -293,6 +293,8 @@ Upgrade git-subrepo before changing this shared repository."
   history_recorded_branch=$(history:field "$gitrepo" branch)
   subrepo_remote=${override_remote:-$history_recorded_remote}
   subrepo_branch=${override_branch:-$history_recorded_branch}
+  validate-upstream "$history_recorded_remote" "$history_recorded_branch"
+  validate-upstream "$subrepo_remote" "$subrepo_branch"
   history:field "$gitrepo" cmdver > /dev/null
   subrepo_parent=$(history:field "$gitrepo" parent)
   join_method=$(history:field "$gitrepo" method)
@@ -362,6 +364,7 @@ Moving a shared directory is not supported yet. Move it back before synchronizin
 Nested shared repositories are not supported in prefixed history. No project files were changed."
     fi
   done < <(git ls-files -z -- '**/.gitrepo')
+  history:validate-owner-path "$history_common"
   local owner=$history_common/subrepo-owners/$subref
   if [[ ! $command =~ ^(log|status|fetch)$ && -f $owner &&
         $(cat "$owner") != "$(git rev-parse --show-toplevel)" ]]; then
@@ -377,6 +380,7 @@ Finish or clean the shared operation there before retrying. Its files were not c
     error "'$subdir/' contains untracked or ignored files. Preserve or commit them before synchronizing; no project files were changed."
   fi
   local pending=$history_common/subrepo-pending/$subref/push
+  history:validate-pending-path
   if [[ -f $pending && ! $command =~ ^(status|log|fetch)$ ]]; then
     local request
     request=$(git config -f "$pending" push.request)
@@ -397,6 +401,10 @@ history:write() {
     remote=$subrepo_remote
     branch=$subrepo_branch
   fi
+  validate-subrepo-path
+  validate-upstream "$remote" "$branch"
+  [[ ! -L $file && ( ! -e $file || -f $file ) ]] ||
+    error "The tracking destination '$file' must be a regular file, not a symbolic link or directory."
   [[ $parent ]] || parent=$original_head_commit
   cat > "$file" <<'EOF'
 ; Managed by git-subrepo. This format requires a prefixed-history capable client.
@@ -641,10 +649,8 @@ history:integration-commit() {
   git commit --quiet "$@" || result=$?
   if (( result != 0 )) && [[ -f $message_path ]]; then
     # Keep editor and hook changes byte-for-byte, before any index rollback.
-    if ! { cp "$message_path" "$journal.message.new" &&
-      mv "$journal.message.new" "$journal.message"; }; then
-      error "Could not save the attempted commit message. Its COMMIT_EDITMSG, project files and recovery record were kept."
-    fi
+    history:save-integration-message "$journal" "$message_path"
+    history:seal-integration "$journal"
   fi
   if [[ ! -e $message_path && -e $previous ]]; then
     mv "$previous" "$message_path" ||
@@ -652,6 +658,62 @@ history:integration-commit() {
   fi
   rm -f "$previous"
   return "$result"
+}
+
+history:save-integration-message() {
+  local journal=$1 source=${2:-} message=${3:-} temporary
+  [[ ! -L $journal.message && ( ! -e $journal.message || -f $journal.message ) ]] ||
+    error "The integration recovery message must be a regular file. Its COMMIT_EDITMSG, project files and recovery record were kept."
+  temporary=$(mktemp "$history_tmp/message.XXXXXXXX") ||
+    error "Could not create a temporary recovery message. Its COMMIT_EDITMSG, project files and recovery record were kept."
+  if [[ $source ]]; then
+    cp "$source" "$temporary" ||
+      error "Could not save the attempted commit message. Its COMMIT_EDITMSG, project files and recovery record were kept."
+  else
+    printf '%s' "$message" > "$temporary"
+    [[ $message == *$'\n' ]] || printf '\n' >> "$temporary"
+  fi
+  mv "$temporary" "$journal.message" ||
+    error "Could not replace the recovery message. Its COMMIT_EDITMSG, project files and recovery record were kept."
+}
+
+history:integration-ref() {
+  local directory identity
+  directory=$(git rev-parse --absolute-git-dir) ||
+    error "Could not locate the Git directory for the integration recovery record."
+  directory=$(cd "$directory" && pwd -P) ||
+    error "Could not resolve the Git directory for the integration recovery record."
+  identity=$(printf '%s' "$directory" | git hash-object --stdin)
+  printf 'refs/subrepo-integrations/%s\n' "$identity"
+}
+
+history:seal-integration() {
+  local journal=$1 blob ref
+  [[ -f $journal && ! -L $journal && -f $journal.message && ! -L $journal.message ]] ||
+    error "The integration recovery record must use regular files. Its files were kept."
+  git config -f "$journal" operation.message "$(git hash-object -w "$journal.message")"
+  blob=$(git hash-object -w "$journal")
+  ref=$(history:integration-ref)
+  git update-ref "$ref" "$blob"
+}
+
+history:verify-integration() {
+  local journal=$1 ref record message
+  ref=$(history:integration-ref)
+  record=$(git rev-parse --verify "$ref" 2>/dev/null) || record=
+  [[ -f $journal && ! -L $journal && -f $journal.message && ! -L $journal.message &&
+     $record && $(git hash-object "$journal") == "$record" ]] ||
+    error "The integration recovery record does not match a prepared operation. No project files were changed; preserve the record for inspection."
+  message=$(git config --blob "$record" operation.message)
+  [[ $(git hash-object "$journal.message") == "$message" ]] ||
+    error "The integration recovery message differs from the prepared operation. No project files were changed; preserve the record for inspection."
+}
+
+history:clear-integration() {
+  local journal=$1 ref
+  ref=$(history:integration-ref)
+  git update-ref -d "$ref"
+  rm -f "$journal" "$journal.message"
 }
 
 history:integrate() {
@@ -698,14 +760,9 @@ history:integrate() {
     git config -f "$prepared" operation.worktreeTip \
       "$(git -C "$history_common/tmp/subrepo/$subref" rev-parse HEAD)"
   fi
-  if [[ $commit_msg_file ]]; then
-    cp "$commit_msg_file" "$journal.message"
-  else
-    # Like Git's -m, terminate the message only if it has no final newline.
-    printf '%s' "$message" > "$journal.message"
-    [[ $message == *$'\n' ]] || printf '\n' >> "$journal.message"
-  fi
+  history:save-integration-message "$journal" "$commit_msg_file" "$message"
   mv "$prepared" "$journal"
+  history:seal-integration "$journal"
   git read-tree --reset -u "$tree"
   if [[ $mapped ]]; then
     printf '%s\n' "$mapped" > "$merge_path"
@@ -739,15 +796,26 @@ Review 'git status' and preserve that work before retrying."
   rm -f "$index"
   # Retarget still owes publication even when this import commit succeeded.
   if [[ ${history_phase:-} != retarget-import ]]; then
-    rm -f "$journal" "$journal.message"
+    history:clear-integration "$journal"
   fi
 }
 
 history:resume-integration() {
   [[ $command =~ ^(help|version|upgrade)$ ]] && return 0
-  local journal expected tree mapped directory request current index merge_path expected_branch
+  local journal expected tree mapped directory request current index merge_path expected_branch ref result
   journal=$(git rev-parse --git-path subrepo-integration)
-  [[ -f $journal ]] || return 0
+  if [[ ! -e $journal && ! -L $journal ]]; then
+    ref=$(history:integration-ref)
+    if git show-ref --verify --quiet "$ref"; then
+      error "The prepared integration recovery record is missing its journal. No project files were changed; preserve the remaining recovery files and ref for inspection."
+    else
+      result=$?
+      [[ $result == 1 ]] ||
+        error "Could not inspect the integration recovery ref. No project files were changed; preserve the recovery files and refs for inspection."
+    fi
+    return 0
+  fi
+  history:verify-integration "$journal"
   expected=$(git config -f "$journal" operation.parent)
   expected_branch=$(git config -f "$journal" operation.branch)
   tree=$(git config -f "$journal" operation.tree)
@@ -755,6 +823,40 @@ history:resume-integration() {
   directory=$(git config -f "$journal" operation.directory)
   request=$(git config -f "$journal" operation.request)
   current=$(git rev-parse HEAD)
+  local subdir=$directory subref gitrepo=$directory/.gitrepo history_mode=prefixed
+  local subrepo_remote='' subrepo_branch='' subrepo_commit='' subrepo_parent=''
+  local subrepo_former='' history_prefix='' history_state='' history_mapped=''
+  local history_recorded_remote='' history_recorded_branch='' history_rewrite=''
+  local upstream_full_ref='' upstream_ref_remote='' upstream_ref_selector=''
+  local pending remote_tip phase
+  check-and-normalize-subdir
+  [[ $subdir == "$directory" ]] ||
+    error "The prepared recovery directory is not normalized. No project files were changed."
+  encode-subdir
+  git:validate-worktree-path
+  history:valid-oid "$expected"
+  [[ ! $mapped ]] || history:valid-oid "$mapped"
+  local empty
+  empty=$(git hash-object --stdin < /dev/null)
+  if [[ ! $tree =~ ^[0-9a-f]+$ || ${#tree} != "${#empty}" ]] ||
+     [[ $(git cat-file -t "$tree" 2>/dev/null) != tree ]]; then
+    error "The prepared recovery tree is invalid. No project files were changed."
+  fi
+  phase=$(git config -f "$journal" operation.phase)
+  [[ $phase == complete || $phase == repair || $phase == retarget-import ]] ||
+    error "The prepared recovery phase is invalid. No project files were changed."
+  [[ -z $(git diff --name-only "$expected" "$tree" -- . ":(exclude,literal)$directory") ]] ||
+    error "The prepared recovery tree changes project-only files. No project files were changed."
+  if [[ $mapped ]]; then
+    local provenance original
+    provenance=$(history:header "$mapped" git-subrepo-rewrite)
+    [[ $provenance == "1 "*" $(history:path-code "$directory")" ]] ||
+      error "The prepared recovery history has invalid provenance. No project files were changed."
+    original=${provenance#1 }; original=${original% *}
+    history:valid-oid "$original"
+    [[ $(git rev-parse --verify "refs/subrepo/$subref/map-1/$original" 2>/dev/null) == "$mapped" ]] ||
+      error "The prepared recovery history has no verified subrepo mapping. No project files were changed."
+  fi
   if [[ $command =~ ^(status|log|fetch)$ ]] || $history_dry_run; then
     printf "An interrupted update for '%s/' needs completion.\nRetry: git subrepo %s\n" "$directory" "$request" >&2
     return
@@ -765,16 +867,16 @@ Your files were kept. Retry: git subrepo $request"
   [[ $(git symbolic-ref HEAD) == "$expected_branch" ]] ||
     error "The interrupted update belongs to branch '${expected_branch#refs/heads/}'.
 Your files were kept. Return to that branch before retrying the saved command."
-  local subdir=$directory subref history_mode=prefixed pending remote remote_branch remote_tip
-  encode-subdir
   pending=$history_common/subrepo-pending/$subref/push
   if [[ -f $pending && $(git config -f "$journal" operation.phase) != retarget-import ]]; then
-    remote=$(git config -f "$pending" push.remote)
-    remote_branch=$(git config -f "$pending" push.remoteBranch)
-    remote_tip=$(git ls-remote "$remote" "refs/heads/$remote_branch") ||
+    read-gitrepo-file
+    local candidate branch=${command_arguments[1]:-}
+    if [[ $command != push || $all_wanted ]]; then branch=; fi
+    candidate=$(history:validate-pending "$pending" "$expected")
+    resolve-upstream-ref
+    remote_tip=$(history:remote-tip "$upstream_full_ref") ||
       error "The earlier push cannot be checked while the remote is unavailable. Reconnect and retry; your files and recovery record were kept."
-    remote_tip=${remote_tip%%$'\t'*}
-    [[ $remote_tip == "$(git config -f "$pending" push.commit)" ]] ||
+    [[ $remote_tip == "$candidate" ]] ||
       error "The shared branch changed after the earlier push. Your files and recovery record were kept; check the upstream with its maintainer before retrying."
   fi
   if [[ $current != "$expected" ]]; then
@@ -820,8 +922,10 @@ Your files were kept. Return to that branch before retrying the saved command."
 history:finish-resumed() {
   local journal=$1 subdir=$2 subref phase pending published
   local history_mode=prefixed
+  check-and-normalize-subdir
   phase=$(git config -f "$journal" operation.phase)
   encode-subdir
+  git:validate-worktree-path
   if [[ $phase == retarget-import ]]; then
     local path=$history_common/tmp/subrepo/$subref tip
     if [[ -d $path ]]; then
@@ -847,6 +951,9 @@ history:finish-resumed() {
     pending=$history_common/subrepo-pending/$subref/push
     if [[ -f $pending ]]; then
       published=$(git config -f "$pending" push.commit)
+      history:valid-oid "$published"
+      git cat-file -e "$published^{commit}" ||
+        error "The pending shared commit is missing. Your files and recovery records were kept."
       [[ $(git config -f "$subdir/.gitrepo" subrepo-v2.commit) == "$published" ]] ||
         error "The resumed update and pending push disagree. Your files and recovery records were kept."
       git update-ref "refs/subrepo/$subref/push" "$published"
@@ -860,13 +967,13 @@ history:finish-resumed() {
   elif [[ $phase == complete ]]; then
     history_finished_request=true
   fi
-  rm -f "$journal" "$journal.message"
+  history:clear-integration "$journal"
 }
 
 history:commit() {
   history:assert-worktree-clean
   git cat-file -e "$subrepo_commit_ref^{commit}" 2>/dev/null ||
-    error "The shared branch '$subrepo_commit_ref' is missing. Run 'git subrepo branch $subdir -F' first."
+    error "The shared branch '$subrepo_commit_ref' is missing. Run 'git subrepo branch $(printf '%q' "$subdir") -F' first."
   git merge-base --is-ancestor "$upstream_head_commit" "$subrepo_commit_ref" ||
     error "The shared branch does not contain the fetched upstream changes. Merge them in its worktree before committing."
   history_state=tracking
@@ -911,8 +1018,11 @@ history:historical-base() {
       error "The historical shared path differs in $commit. Moving prefixed shared directories is not supported."
     printf '%s\n' "$subrepo_commit"
   else
-    git config -f "$file" subrepo.commit ||
+    local base
+    base=$(git config -f "$file" subrepo.commit) ||
       error "The historical tracking file for '$subdir/' has no shared commit in $commit."
+    [[ ! $base ]] || history:valid-oid "$base"
+    printf '%s\n' "$base"
   fi
 }
 
@@ -958,13 +1068,14 @@ history:restore-replay() {
 
 history:export() {
   set -e
+  local project=${1:-HEAD}
   local commits source parent base tree candidate first raw_source encoded source_parents mapped_base
   encoded=$(history:path-code "$subdir")
   declare -A projected=()
   if [[ $history_state == unpublished ]]; then
-    commits=$(git rev-list --reverse --topo-order HEAD)
+    commits=$(git rev-list --reverse --topo-order "$project")
   else
-    commits=$(git rev-list --reverse --topo-order --ancestry-path "$subrepo_parent..HEAD")
+    commits=$(git rev-list --reverse --topo-order --ancestry-path "$subrepo_parent..$project")
   fi
   candidate=
   while IFS= read -r source; do
@@ -1025,9 +1136,9 @@ history:export() {
     fi
     projected[$source]=$candidate
   done <<< "$commits"
-  candidate=${projected[$(git rev-parse HEAD)]-${subrepo_commit:-}}
+  candidate=${projected[$(git rev-parse "$project")]-${subrepo_commit:-}}
   [[ $candidate ]] || error "There are no shared files to publish from '$subdir/'."
-  [[ $(git rev-parse "$candidate^{tree}") == "$(history:tree HEAD)" ]] ||
+  [[ $(git rev-parse "$candidate^{tree}") == "$(history:tree "$project")" ]] ||
     error "The prepared shared branch does not match '$subdir/'. Nothing was pushed; keep your files and report this history case."
   if [[ $history_state == tracking ]]; then
     git merge-base --is-ancestor "$subrepo_commit" "$candidate" ||
@@ -1038,6 +1149,7 @@ history:export() {
 
 history:branch() {
   local branch=${1:-subrepo/$subref} candidate
+  history:validate-owner-path "$history_common"
   candidate=$(history:export)
   git branch "$branch" "$candidate"
   git:create-worktree "$branch"
@@ -1048,6 +1160,7 @@ history:branch() {
 
 history:assert-worktree-clean() {
   local path=$history_common/tmp/subrepo/$subref changes
+  git:validate-worktree-path
   [[ -d $path ]] || return 0
   changes=$(git --no-optional-locks -C "$path" status --porcelain) ||
     error "Unable to inspect the shared worktree '$path'. Its files were not changed."
@@ -1063,6 +1176,7 @@ Preserve or commit them there before cleanup. No worktree was deleted."
 
 history:remove-worktree() {
   local path=$history_common/tmp/subrepo/$subref
+  history:validate-owner-path "$history_common"
   history:assert-worktree-clean
   if [[ ! -d $path ]]; then
     rm -f "$history_common/subrepo-owners/$subref"
@@ -1151,23 +1265,134 @@ history:invocation() {
   done
 }
 
+history:push-candidate() {
+  set -e
+  local snapshot=$1 project=${2:-HEAD} candidate
+  if [[ ${branch:-} ]]; then
+    [[ $branch != -* ]] ||
+      error "Invalid shared branch. Nothing was pushed."
+    candidate=$(git rev-parse --verify "$branch^{commit}") ||
+      error "The shared branch '$branch' does not exist."
+    [[ $(git rev-parse "$candidate^{tree}") == "$snapshot" ]] ||
+      error "The shared branch differs from '$subdir/'. Commit it into the project with 'git subrepo commit' before pushing."
+    [[ $history_state != tracking ]] ||
+      git merge-base --is-ancestor "$subrepo_commit" "$candidate" ||
+      error "The selected shared branch does not contain its upstream history. Nothing was pushed."
+  else
+    candidate=$(history:export "$project")
+  fi
+  if $squash_wanted; then
+    local parents=() provenance range_base='' item
+    [[ ! $subrepo_commit ]] || parents+=("$subrepo_commit")
+    if [[ $history_state == tracking ]]; then
+      while IFS= read -r item; do
+        if [[ $(history:tree "$item") == "$(git rev-parse "$subrepo_commit^{tree}")" ]]; then
+          range_base=$item
+        fi
+      done < <(git rev-list --reverse --ancestry-path "$subrepo_parent..$project")
+    fi
+    provenance=
+    if [[ $range_base ]]; then
+      provenance="git-subrepo-source-range 1 $range_base $(git rev-parse "$project") $(history:path-code "$subdir")"
+    fi
+    candidate=$(history:object "$project" "$snapshot" "$provenance" "${parents[@]}")
+  fi
+  printf '%s\n' "$candidate"
+}
+
+history:validate-record-path() {
+  local relative=$1 label=$2 current=${3:-${history_common:-}}
+  local component remaining=${relative%/*} leaf=${relative##*/}
+  [[ $current == /* && $leaf && $leaf != . && $leaf != .. ]] ||
+    error "The $label path is not inside the Git administration directory. Preserve the record and inspect its path before retrying."
+  while [[ $remaining ]]; do
+    component=${remaining%%/*}
+    current=$current/$component
+    [[ $component && $component != . && $component != .. &&
+       ! -L $current && ( ! -e $current || -d $current ) ]] ||
+      error "The $label path is not a real repository directory; symbolic links are not allowed. Preserve the record and inspect its path before retrying."
+    if [[ $remaining == */* ]]; then remaining=${remaining#*/}; else remaining=; fi
+  done
+  [[ ! -L $current/$leaf && ( ! -e $current/$leaf || -f $current/$leaf ) ]] ||
+    error "The $label record must be a regular file, not a symbolic link or directory. Preserve the record and inspect its path before retrying."
+}
+
+history:validate-owner-path() {
+  history:validate-record-path "subrepo-owners/$subref" \
+    'shared worktree ownership' "$1"
+}
+
+history:validate-pending-path() {
+  history:validate-record-path "subrepo-pending/$subref/push" 'pending publication'
+}
+
+history:validate-pending() {
+  set -e
+  local pending=$1 project=$2 candidate expected previous snapshot prepared
+  history:validate-pending-path
+  [[ -f $pending && ! -L $pending ]] ||
+    error "The pending publication record is not a regular file. Nothing was pushed."
+  candidate=$(git config -f "$pending" push.commit)
+  expected=$(git config -f "$pending" push.parent)
+  previous=$(git config -f "$pending" push.previous)
+  history:valid-oid "$candidate"
+  history:valid-oid "$expected"
+  [[ ! $previous ]] || history:valid-oid "$previous"
+  [[ $expected == "$project" &&
+     $(git config -f "$pending" push.remote) == "$subrepo_remote" &&
+     $(git config -f "$pending" push.remoteBranch) == "$subrepo_branch" ]] ||
+    error "The pending publication history or destination differs from the requested operation. Nothing was pushed."
+  git cat-file -e "$candidate^{commit}" ||
+    error "The pending publication candidate is missing. Nothing was pushed."
+  snapshot=$(history:tree "$project")
+  [[ $(git rev-parse "$candidate^{tree}") == "$snapshot" ]] ||
+    error "The pending publication candidate does not match the shared snapshot. Nothing was pushed."
+  [[ $history_state != tracking ]] ||
+    git merge-base --is-ancestor "$subrepo_commit" "$candidate" ||
+    error "The pending publication candidate lost its upstream history. Nothing was pushed."
+  prepared=$(history:push-candidate "$snapshot" "$project")
+  [[ $candidate == "$prepared" ]] ||
+    error "The pending publication candidate is not the prepared shared history. Nothing was pushed."
+  printf '%s\n' "$candidate"
+}
+
+history:remote-tip() {
+  local ref=$1 output oid name tip='' peeled=''
+  validate-upstream "$subrepo_remote" "$subrepo_branch"
+  local selectors=("$ref")
+  [[ $ref != refs/tags/* ]] || selectors+=("$ref^{}")
+  output=$(git:with-safe-protocols git ls-remote -- "$subrepo_remote" "${selectors[@]}") || return
+  while IFS=$'\t' read -r oid name; do
+    if [[ $name == "$ref" ]]; then
+      tip=$oid
+    elif [[ $name == "$ref^{}" ]]; then
+      peeled=$oid
+    fi
+  done <<< "$output"
+  tip=${peeled:-$tip}
+  [[ ! $tip ]] || history:valid-oid "$tip"
+  printf '%s\n' "$tip"
+}
+
 history:push() {
   if [[ $command == push ]] && $force_wanted; then
     error "Force-pushing is not supported for prefixed shared history. Pull and resolve incoming changes before pushing; no changes were sent."
   fi
   local pending=$history_common/subrepo-pending/$subref/push
-  local candidate remote_tip snapshot expected publish=true previous_tip prepared
+  local candidate remote_tip snapshot expected publish=true previous_tip prepared destination
+  history:validate-pending-path
+  resolve-upstream-ref
+  destination=$upstream_full_ref
   snapshot=$(history:tree HEAD)
-  remote_tip=$(git ls-remote "$subrepo_remote" "refs/heads/$subrepo_branch") ||
+  remote_tip=$(history:remote-tip "$destination") ||
     error "Could not contact the shared repository for '$subdir/'. Check the remote and your connection; nothing was pushed."
-  remote_tip=${remote_tip%%$'\t'*}
   if [[ $remote_tip ]]; then
     subrepo:fetch
   elif [[ $history_state != unpublished && $command != retarget ]]; then
     error "The shared branch '$subrepo_branch' is missing upstream. Nothing was pushed; check the selected branch."
   fi
   if [[ -f $pending ]]; then
-    candidate=$(git config -f "$pending" push.commit)
+    candidate=$(history:validate-pending "$pending" "$(git rev-parse HEAD)")
     expected=$(git config -f "$pending" push.parent)
     [[ $(git rev-parse HEAD) == "$expected" ]] ||
       error "A previous push for '$subdir/' needs local completion, but the project has changed.
@@ -1198,33 +1423,7 @@ Then retry your push."
       fi
       OK=false; CODE=-2; return
     fi
-    if [[ $branch ]]; then
-      candidate=$(git rev-parse "$branch^{commit}") ||
-        error "The shared branch '$branch' does not exist."
-      [[ $(git rev-parse "$candidate^{tree}") == "$snapshot" ]] ||
-        error "The shared branch differs from '$subdir/'. Commit it into the project with 'git subrepo commit' before pushing."
-      [[ $history_state != tracking ]] ||
-        git merge-base --is-ancestor "$subrepo_commit" "$candidate" ||
-        error "The selected shared branch does not contain its upstream history. Nothing was pushed."
-    else
-      candidate=$(history:export)
-    fi
-    if $squash_wanted; then
-      local parents=() provenance range_base='' item
-      [[ ! $subrepo_commit ]] || parents+=("$subrepo_commit")
-      if [[ $history_state == tracking ]]; then
-        while IFS= read -r item; do
-          if [[ $(history:tree "$item") == "$(git rev-parse "$subrepo_commit^{tree}")" ]]; then
-            range_base=$item
-          fi
-        done < <(git rev-list --reverse --ancestry-path "$subrepo_parent..HEAD")
-      fi
-      provenance=
-      if [[ $range_base ]]; then
-        provenance="git-subrepo-source-range 1 $range_base $(git rev-parse HEAD) $(history:path-code "$subdir")"
-      fi
-      candidate=$(history:object HEAD "$snapshot" "$provenance" "${parents[@]}")
-    fi
+    candidate=$(history:push-candidate "$snapshot")
     mkdir -p "$(dirname "$pending")"
     prepared=$history_tmp/pending-push
     git config -f "$prepared" push.commit "$candidate"
@@ -1239,10 +1438,9 @@ Then retry your push."
   fi
   if $publish; then
     previous_tip=$(git config -f "$pending" push.previous)
-    if ! git push "$subrepo_remote" "$candidate:refs/heads/$subrepo_branch"; then
-      remote_tip=$(git ls-remote "$subrepo_remote" "refs/heads/$subrepo_branch") ||
+    if ! git:with-safe-protocols git push -- "$subrepo_remote" "$candidate:$destination"; then
+      remote_tip=$(history:remote-tip "$destination") ||
         error "The push result could not be confirmed. Your files and pending record were kept. Retry this push after reconnecting."
-      remote_tip=${remote_tip%%$'\t'*}
       if [[ $remote_tip != "$candidate" ]]; then
         [[ $remote_tip == "$previous_tip" ]] ||
           error "The shared branch changed while the push was running. Your local changes and pending record were kept; check the upstream before retrying."
@@ -1265,13 +1463,13 @@ Then retry your push."
 
 history:retarget() {
   local remote_tip branch='' snapshot target=subrepo/$subref
+  resolve-upstream-ref
   if [[ -f $history_common/subrepo-pending/$subref/push ]]; then
     history:publish-retarget
     return
   fi
-  remote_tip=$(git ls-remote "$subrepo_remote" "refs/heads/$subrepo_branch") ||
+  remote_tip=$(history:remote-tip "$upstream_full_ref") ||
     error "Could not contact the shared repository. Check the remote and your connection; nothing was pushed."
-  remote_tip=${remote_tip%%$'\t'*}
   if [[ $remote_tip ]]; then
     subrepo:fetch
     remote_tip=$upstream_head_commit
@@ -1285,7 +1483,7 @@ history:retarget() {
     # New incoming history needs a new import, not a replay of the saved one.
     local journal
     journal=$(git rev-parse --git-path subrepo-integration)
-    rm -f "$journal" "$journal.message"
+    history:clear-integration "$journal"
   fi
   worktree=$history_common/tmp/$target
   snapshot=$(history:tree HEAD)
@@ -1338,7 +1536,7 @@ history:publish-retarget() {
   # A no-op push creates no integration of its own to clear the import journal.
   local journal
   journal=$(git rev-parse --git-path subrepo-integration)
-  rm -f "$journal" "$journal.message"
+  history:clear-integration "$journal"
   OK=true
 }
 
@@ -1346,9 +1544,9 @@ history:preview-retarget() {
   local tip path=$history_common/tmp/subrepo/$subref
   printf "Preview retarget of '%s/':\n  From: %s (%s)\n  To:   %s (%s)\n" \
     "$subdir" "$history_recorded_remote" "$history_recorded_branch" "$subrepo_remote" "$subrepo_branch"
-  tip=$(git ls-remote "$subrepo_remote" "refs/heads/$subrepo_branch") ||
+  resolve-upstream-ref
+  tip=$(history:remote-tip "$upstream_full_ref") ||
     error "Could not check the destination. No files, refs, or tracking settings were changed."
-  tip=${tip%%$'\t'*}
   if [[ ! $tip ]]; then
     printf '  Destination branch does not exist; retarget will create it and publish shared history.\n'
   elif git cat-file -e "$tip^{commit}" 2>/dev/null &&
@@ -1447,6 +1645,11 @@ history:config() {
     git config -f "$gitrepo" subrepo-v2.method "$config_value"
     say "Updated the join method for '$subdir/'. Commit the tracking file before synchronizing."
   elif [[ $history_state == unpublished && $config_option =~ ^(remote|branch)$ ]]; then
+    if [[ $config_option == remote ]]; then
+      validate-upstream "$config_value" "$subrepo_branch"
+    else
+      validate-upstream "$subrepo_remote" "$config_value"
+    fi
     git config -f "$gitrepo" "subrepo-v2.$config_option" "$config_value"
     say "Updated '$subdir/'. Commit the tracking file before publishing."
   else
@@ -1716,20 +1919,26 @@ command:log() {
 
 history:log-render() {
   local commits line metadata=$history_tmp/log-metadata
+  local oid type size raw=$history_tmp/log-commit
   commits=$(git rev-list --topo-order "${selection[@]}" "${revisions[@]}" "${paths[@]}")
   [[ $commits ]] || return 0
   declare -A groups=() omitted=() selected=() records=() provenance=()
-  # Raw log preserves custom headers and indents messages, so message text cannot
-  # masquerade as provenance. Two batch reads replace per-entry display processes.
-  git log --no-walk=unsorted --stdin --no-show-signature --no-decorate --no-color \
-    --format=raw <<< "$commits" > "$metadata"
-  while IFS= read -r line; do
-    case "$line" in
-      commit\ *) commit=${line#commit }; selected[$commit]=true ;;
-      git-subrepo-rewrite\ *) records[$commit]=${line#git-subrepo-rewrite } ;;
-      git-subrepo-source\ *|git-subrepo-source-range\ *) provenance[$commit]=true ;;
-    esac
-  done < "$metadata"
+  # Object framing, not header text, determines each provenance record's owner.
+  git cat-file --batch <<< "$commits" > "$metadata"
+  while IFS= read -r commit; do
+    read -r oid type size <&3
+    [[ $oid == "$commit" && $type == commit && $size =~ ^[0-9]+$ ]] ||
+      error "The selected history object could not be read. No project files were changed."
+    head -c "$size" <&3 > "$raw"
+    IFS= read -r line <&3
+    selected[$commit]=true
+    while IFS= read -r line && [[ $line ]]; do
+      case "$line" in
+        git-subrepo-rewrite\ *) records[$commit]=${line#git-subrepo-rewrite } ;;
+        git-subrepo-source\ *|git-subrepo-source-range\ *) provenance[$commit]=true ;;
+      esac
+    done < "$raw"
+  done 3< "$metadata" <<< "$commits"
   if $history_group; then
     while IFS= read -r commit; do
       [[ $commit ]] || continue
