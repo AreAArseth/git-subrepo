@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016,SC2329
+# shellcheck disable=SC2016
 
 set -e
 source test/setup
@@ -20,10 +20,12 @@ override_branch=master
 update_wanted=true
 branch=
 export CAPTURE=$TMP/arguments
-git() {
-  printf '%s\n' "$PWD" "$#" "$@" >> "$CAPTURE"
-}
-export -f git
+mkdir "$TMP/recording-bin"
+cat > "$TMP/recording-bin/git" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$PWD" "$#" "$@" >> "$CAPTURE"
+EOF
+chmod +x "$TMP/recording-bin/git"
 for command in pull push retarget; do
   for join_method in merge rebase; do
     error-join > "$TMP/instructions"
@@ -31,7 +33,8 @@ for command in pull push retarget; do
       "$TMP/instructions" > "$TMP/paste"
     : > "$CAPTURE"
     status=0
-    (cd "$start_pwd" && bash "$TMP/paste") > "$TMP/paste-output" 2>&1 || status=$?
+    (cd "$start_pwd" && PATH="$TMP/recording-bin:$PATH" bash "$TMP/paste") \
+      > "$TMP/paste-output" 2>&1 || status=$?
     is "$status" 0 "$command/$join_method recovery commands are safe to paste"
     matches=$(grep -Fxc -- "$subdir" "$CAPTURE" || true)
     expected=2
@@ -46,8 +49,6 @@ for command in pull push retarget; do
     test-exists "!$start_pwd/marker" "!$start_pwd/tick" "!$worktree/marker" "!$worktree/tick"
   done
 done
-unset -f git
-
 if command -v zsh > /dev/null; then
   git init -q "$TMP/completion"
   (
@@ -78,13 +79,17 @@ wait_marker() {
     if zpty -r completion chunk; then received+=$chunk; fi
   done
 }
-zpty -w completion 'PS1="READY>"; autoload -Uz compinit; compinit -i -D; source "$GIT_SUBREPO_ROOT/share/zsh-completion/_git-subrepo"; cd "$COMPLETION_REPO"; _test_completion() { local original=$PATH; _compadd_subdirs; printf "%s\n" "$original" "$PATH" "$compstate[nmatches]" > "$COMPLETION_RESULT"; printf "%s%s\n" COMPLETION_ DONE; }; zle -C test-completion complete-word _test_completion; bindkey "^I" test-completion; printf "%s%s\n" SETUP_ DONE'
-wait_marker SETUP_DONE || exit 1
+# Wait for the input editor, not just the end of the setup command.
+zpty -w completion 'PS1="READY>"; autoload -Uz compinit; compinit -i -D; source "$GIT_SUBREPO_ROOT/share/zsh-completion/_git-subrepo"; cd "$COMPLETION_REPO"; _test_completion() { local original=$PATH; _compadd_subdirs; printf "%s\n" "$original" "$PATH" "$compstate[nmatches]" > "$COMPLETION_RESULT"; printf "%s%s\n" COMPLETION_ DONE; }; zle -C test-completion complete-word _test_completion; bindkey "^I" test-completion; zle-line-init() { printf "%s%s\n" INPUT_ READY; }; zle -N zle-line-init'
+wait_marker INPUT_READY || exit 1
 zpty -w -n completion $'git subrepo pull \t'
 wait_marker COMPLETION_DONE || exit 1
 EOF
   status=0
   zsh -f "$TMP/completion.zsh" > "$TMP/completion-output" 2>&1 || status=$?
+  if (( status != 0 )); then
+    diag "$(cat "$TMP/completion-output")"
+  fi
   is "$status" 0 'real zsh completion handles option-shaped candidates'
   if [[ -f $COMPLETION_RESULT ]]; then
     is "$(sed -n '2p' "$COMPLETION_RESULT")" "$(sed -n '1p' "$COMPLETION_RESULT")" \

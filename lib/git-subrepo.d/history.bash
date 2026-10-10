@@ -814,9 +814,10 @@ history:resume-integration() {
   [[ ! $mapped ]] || history:valid-oid "$mapped"
   local empty
   empty=$(git hash-object --stdin < /dev/null)
-  [[ $tree =~ ^[0-9a-f]+$ && ${#tree} == "${#empty}" ]] &&
-    [[ $(git cat-file -t "$tree" 2>/dev/null) == tree ]] ||
+  if [[ ! $tree =~ ^[0-9a-f]+$ || ${#tree} != "${#empty}" ]] ||
+     [[ $(git cat-file -t "$tree" 2>/dev/null) != tree ]]; then
     error "The prepared recovery tree is invalid. No project files were changed."
+  fi
   phase=$(git config -f "$journal" operation.phase)
   [[ $phase == complete || $phase == repair || $phase == retarget-import ]] ||
     error "The prepared recovery phase is invalid. No project files were changed."
