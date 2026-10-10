@@ -48,6 +48,28 @@ same-bytes() {
   is "$result" 0 "$3"
 }
 
+for source in file message; do
+  repo=$OWNER/redirected-$source
+  git clone -q "$UPSTREAM/foo" "$repo"
+  printf 'Preserve outside recovery content\n' > "$TMP/protected-initial-message"
+  ln -s "$TMP/protected-initial-message" "$repo/.git/subrepo-integration.message"
+  before=$(git -C "$repo" rev-parse HEAD)
+  printf 'Intended integration message\n' > "$TMP/intended"
+  options=(--file "$TMP/intended")
+  if [[ $source == message ]]; then options=(--message 'Intended integration message'); fi
+  attempt
+  is "$status" 1 "$source initial integration refuses a redirected saved-message destination"
+  like "$(cat "$TMP/attempt")" 'message must be a regular file' \
+    'initial message refusal explains the unsafe destination'
+  is "$(cat "$TMP/protected-initial-message")" 'Preserve outside recovery content' \
+    'initial integration preserves the external destination bytes'
+  is "$(git -C "$repo" rev-parse HEAD)" "$before" 'initial message refusal preserves project HEAD'
+  is "$(git -C "$repo" status --porcelain)" "" 'initial message refusal preserves project files and index'
+  rm "$repo/.git/subrepo-integration.message"
+  attempt
+  is "$status" 0 "$source integration still works after removing the unsafe destination"
+done
+
 for boundary in commit-msg signing pre-commit prepare-commit-msg editor; do
   repo=$OWNER/edited-$boundary
   git clone -q "$UPSTREAM/foo" "$repo"
@@ -69,8 +91,15 @@ for boundary in commit-msg signing pre-commit prepare-commit-msg editor; do
   fi
 
   for retry in 1 2; do
+    printf 'Preserve external message bytes\n' > "$TMP/protected-message"
+    ln -s "$TMP/protected-message" "$TEST_STATE/subrepo-integration.message.new"
     attempt
     is "$status" 1 "$boundary attempt $retry fails at the real Git boundary"
+    is "$(cat "$TMP/protected-message")" 'Preserve external message bytes' \
+      "$boundary attempt $retry never writes through a predictable message temporary symlink"
+    is "$([[ -L $TEST_STATE/subrepo-integration.message.new ]] && echo preserved)" preserved \
+      'message saving leaves an unrelated temporary-path symlink untouched'
+    rm -f "$TEST_STATE/subrepo-integration.message.new"
     is "$(git -C "$repo" rev-parse HEAD)" "$before" 'failure does not create a parent commit'
     if [[ $retry == 1 ]]; then
       is "$(git -C "$repo" status --porcelain)" "" 'first failure safely restores project files'

@@ -141,6 +141,7 @@ main() {
   local subrepo_commit=         # Upstream HEAD from previous clone/pull
   local subrepo_parent=         # Local commit from before previous clone/pull
   local subrepo_former=         # A retired gitrepo key that might still exist
+  local upstream_full_ref='' upstream_ref_remote='' upstream_ref_selector=''
 
   local refs_subrepo_branch=    # A subrepo ref -> commit of branch/pull command
   local refs_subrepo_commit=    # A subrepo ref -> commit last merged
@@ -697,7 +698,7 @@ subrepo:clone() {
       CALL subrepo:fetch
     else
       read-gitrepo-file
-      if [[ -z $override_branch ]]; then
+      if [[ -z $override_branch && -z $upstream_full_ref ]]; then
         o "Determine the upstream head branch."
         get-upstream-head-branch
         subrepo_branch=$output
@@ -834,8 +835,8 @@ subrepo:retarget() {
 
   local destination tag_tip=''
   local push_options=()
-  destination=$(upstream-ref) ||
-    error "Could not resolve the upstream publication destination. Nothing was pushed."
+  resolve-upstream-ref
+  destination=$upstream_full_ref
   if [[ $destination == refs/tags/* ]] && ! $force_wanted; then
     error "Legacy retarget to a tag requires --force. This can replace the tag; inspect the destination before retrying. No files or refs were changed."
   fi
@@ -961,6 +962,8 @@ subrepo:push() {
   local branch_name=$branch
   local new_upstream=false
   local branch_created=false
+  resolve-upstream-ref
+  local destination=$upstream_full_ref
 
   if [[ -z $branch_name ]]; then
     FAIL=false OUT=false CALL subrepo:fetch
@@ -1076,9 +1079,6 @@ subrepo:push() {
   "$force_wanted" && force=' --force'
 
   o "Push$force branch '$branch_name' to '$subrepo_remote' ($subrepo_branch)."
-  local destination
-  destination=$(upstream-ref) ||
-    error "Could not resolve the upstream publication destination. Nothing was pushed."
   # shellcheck disable=2086
   git:with-safe-protocols RUN git push$force -- "$subrepo_remote" "$branch_name:$destination"
 
@@ -1117,10 +1117,8 @@ subrepo:fetch() {
   fi
 
   o "Fetch the upstream: $subrepo_remote ($subrepo_branch)."
-  local upstream_ref
-  upstream_ref=$(upstream-ref) ||
-    error "Could not resolve the upstream fetch selector. Check the tracking settings and remote."
-  git:with-safe-protocols RUN git fetch --no-tags --quiet --refmap= -- "$subrepo_remote" "$upstream_ref"
+  resolve-upstream-ref
+  git:with-safe-protocols RUN git fetch --no-tags --quiet --refmap= -- "$subrepo_remote" "$upstream_full_ref"
   OK || return
 
   o "Get the upstream subrepo HEAD commit."
@@ -1401,6 +1399,7 @@ subrepo:status() {
   fi
 
   for subdir in "${subrepos[@]}"; do
+    local upstream_full_ref='' upstream_ref_remote='' upstream_ref_selector=''
     check-and-normalize-subdir
     encode-subdir
 
@@ -1808,6 +1807,9 @@ command-prepare() {
   history_rewrite=
   history_recorded_remote=
   history_recorded_branch=
+  upstream_full_ref=
+  upstream_ref_remote=
+  upstream_ref_selector=
 }
 
 # Do the setup steps needed by most of the subrepo subcommands:
@@ -2021,6 +2023,19 @@ git:with-safe-protocols() {
     fi
   done
   GIT_ALLOW_PROTOCOL=$allowed "$@"
+}
+
+resolve-upstream-ref() {
+  if [[ ${upstream_full_ref:-} ]]; then
+    [[ $upstream_ref_remote == "$subrepo_remote" &&
+       $upstream_ref_selector == "$subrepo_branch" ]] ||
+      error "The upstream settings changed during this operation. Retry with the intended remote and selector."
+    return
+  fi
+  upstream_full_ref=$(upstream-ref) ||
+    error "Could not resolve the upstream selector. Check the tracking settings and remote."
+  upstream_ref_remote=$subrepo_remote
+  upstream_ref_selector=$subrepo_branch
 }
 
 upstream-ref() {

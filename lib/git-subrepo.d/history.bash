@@ -645,10 +645,7 @@ history:integration-commit() {
   git commit --quiet "$@" || result=$?
   if (( result != 0 )) && [[ -f $message_path ]]; then
     # Keep editor and hook changes byte-for-byte, before any index rollback.
-    if ! { cp "$message_path" "$journal.message.new" &&
-      mv "$journal.message.new" "$journal.message"; }; then
-      error "Could not save the attempted commit message. Its COMMIT_EDITMSG, project files and recovery record were kept."
-    fi
+    history:save-integration-message "$journal" "$message_path"
     history:seal-integration "$journal"
   fi
   if [[ ! -e $message_path && -e $previous ]]; then
@@ -657,6 +654,23 @@ history:integration-commit() {
   fi
   rm -f "$previous"
   return "$result"
+}
+
+history:save-integration-message() {
+  local journal=$1 source=${2:-} message=${3:-} temporary
+  [[ ! -L $journal.message && ( ! -e $journal.message || -f $journal.message ) ]] ||
+    error "The integration recovery message must be a regular file. Its COMMIT_EDITMSG, project files and recovery record were kept."
+  temporary=$(mktemp "$history_tmp/message.XXXXXXXX") ||
+    error "Could not create a temporary recovery message. Its COMMIT_EDITMSG, project files and recovery record were kept."
+  if [[ $source ]]; then
+    cp "$source" "$temporary" ||
+      error "Could not save the attempted commit message. Its COMMIT_EDITMSG, project files and recovery record were kept."
+  else
+    printf '%s' "$message" > "$temporary"
+    [[ $message == *$'\n' ]] || printf '\n' >> "$temporary"
+  fi
+  mv "$temporary" "$journal.message" ||
+    error "Could not replace the recovery message. Its COMMIT_EDITMSG, project files and recovery record were kept."
 }
 
 history:integration-ref() {
@@ -742,13 +756,7 @@ history:integrate() {
     git config -f "$prepared" operation.worktreeTip \
       "$(git -C "$history_common/tmp/subrepo/$subref" rev-parse HEAD)"
   fi
-  if [[ $commit_msg_file ]]; then
-    cp "$commit_msg_file" "$journal.message"
-  else
-    # Like Git's -m, terminate the message only if it has no final newline.
-    printf '%s' "$message" > "$journal.message"
-    [[ $message == *$'\n' ]] || printf '\n' >> "$journal.message"
-  fi
+  history:save-integration-message "$journal" "$commit_msg_file" "$message"
   mv "$prepared" "$journal"
   history:seal-integration "$journal"
   git read-tree --reset -u "$tree"
@@ -790,9 +798,19 @@ Review 'git status' and preserve that work before retrying."
 
 history:resume-integration() {
   [[ $command =~ ^(help|version|upgrade)$ ]] && return 0
-  local journal expected tree mapped directory request current index merge_path expected_branch
+  local journal expected tree mapped directory request current index merge_path expected_branch ref result
   journal=$(git rev-parse --git-path subrepo-integration)
-  [[ -e $journal || -L $journal ]] || return 0
+  if [[ ! -e $journal && ! -L $journal ]]; then
+    ref=$(history:integration-ref)
+    if git show-ref --verify --quiet "$ref"; then
+      error "The prepared integration recovery record is missing its journal. No project files were changed; preserve the remaining recovery files and ref for inspection."
+    else
+      result=$?
+      [[ $result == 1 ]] ||
+        error "Could not inspect the integration recovery ref. No project files were changed; preserve the recovery files and refs for inspection."
+    fi
+    return 0
+  fi
   history:verify-integration "$journal"
   expected=$(git config -f "$journal" operation.parent)
   expected_branch=$(git config -f "$journal" operation.branch)
@@ -805,6 +823,7 @@ history:resume-integration() {
   local subrepo_remote='' subrepo_branch='' subrepo_commit='' subrepo_parent=''
   local subrepo_former='' history_prefix='' history_state='' history_mapped=''
   local history_recorded_remote='' history_recorded_branch='' history_rewrite=''
+  local upstream_full_ref='' upstream_ref_remote='' upstream_ref_selector=''
   local pending remote_tip phase
   check-and-normalize-subdir
   [[ $subdir == "$directory" ]] ||
@@ -850,7 +869,8 @@ Your files were kept. Return to that branch before retrying the saved command."
     local candidate branch=${command_arguments[1]:-}
     if [[ $command != push || $all_wanted ]]; then branch=; fi
     candidate=$(history:validate-pending "$pending" "$expected")
-    remote_tip=$(history:remote-tip) ||
+    resolve-upstream-ref
+    remote_tip=$(history:remote-tip "$upstream_full_ref") ||
       error "The earlier push cannot be checked while the remote is unavailable. Reconnect and retry; your files and recovery record were kept."
     [[ $remote_tip == "$candidate" ]] ||
       error "The shared branch changed after the earlier push. Your files and recovery record were kept; check the upstream with its maintainer before retrying."
@@ -1333,11 +1353,8 @@ history:validate-pending() {
 }
 
 history:remote-tip() {
-  local ref=${1:-} output oid name tip='' peeled=''
+  local ref=$1 output oid name tip='' peeled=''
   validate-upstream "$subrepo_remote" "$subrepo_branch"
-  if [[ ! $ref ]]; then
-    ref=$(upstream-ref) || return
-  fi
   local selectors=("$ref")
   [[ $ref != refs/tags/* ]] || selectors+=("$ref^{}")
   output=$(git:with-safe-protocols git ls-remote -- "$subrepo_remote" "${selectors[@]}") || return
@@ -1360,8 +1377,8 @@ history:push() {
   local pending=$history_common/subrepo-pending/$subref/push
   local candidate remote_tip snapshot expected publish=true previous_tip prepared destination
   history:validate-pending-path
-  destination=$(upstream-ref) ||
-    error "Could not resolve the upstream publication destination. Nothing was pushed."
+  resolve-upstream-ref
+  destination=$upstream_full_ref
   snapshot=$(history:tree HEAD)
   remote_tip=$(history:remote-tip "$destination") ||
     error "Could not contact the shared repository for '$subdir/'. Check the remote and your connection; nothing was pushed."
@@ -1442,11 +1459,12 @@ Then retry your push."
 
 history:retarget() {
   local remote_tip branch='' snapshot target=subrepo/$subref
+  resolve-upstream-ref
   if [[ -f $history_common/subrepo-pending/$subref/push ]]; then
     history:publish-retarget
     return
   fi
-  remote_tip=$(history:remote-tip) ||
+  remote_tip=$(history:remote-tip "$upstream_full_ref") ||
     error "Could not contact the shared repository. Check the remote and your connection; nothing was pushed."
   if [[ $remote_tip ]]; then
     subrepo:fetch
@@ -1522,7 +1540,8 @@ history:preview-retarget() {
   local tip path=$history_common/tmp/subrepo/$subref
   printf "Preview retarget of '%s/':\n  From: %s (%s)\n  To:   %s (%s)\n" \
     "$subdir" "$history_recorded_remote" "$history_recorded_branch" "$subrepo_remote" "$subrepo_branch"
-  tip=$(history:remote-tip) ||
+  resolve-upstream-ref
+  tip=$(history:remote-tip "$upstream_full_ref") ||
     error "Could not check the destination. No files, refs, or tracking settings were changed."
   if [[ ! $tip ]]; then
     printf '  Destination branch does not exist; retarget will create it and publish shared history.\n'

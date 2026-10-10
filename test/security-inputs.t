@@ -197,6 +197,24 @@ for mode in legacy prefixed; do
     'explicit tag fetch selects the tag commit rather than the same-named branch'
 done
 
+for mode in legacy prefixed; do
+  repo=$OWNER/status-multiple-$mode
+  git clone -q "$UPSTREAM/foo" "$repo"
+  for name in first second; do
+    remote=$UPSTREAM/status-$mode-$name.git
+    git clone -q --bare "$UPSTREAM/bar" "$remote"
+    (cd "$repo" && git subrepo clone "$remote" "$name" --history="$mode") > /dev/null
+  done
+  status=0
+  (cd "$repo" && git subrepo status --fetch) > "$TMP/status-multiple" 2>&1 || status=$?
+  is "$status" 0 "$mode status fetch scopes upstream selection to each subrepo"
+  for name in first second; do
+    is "$(git -C "$repo" rev-parse "refs/subrepo/$name/fetch")" \
+      "$(git --git-dir="$UPSTREAM/status-$mode-$name.git" rev-parse master)" \
+      "status fetch selects the correct upstream for $name"
+  done
+done
+
 git clone -q --bare "$UPSTREAM/bar" "$UPSTREAM/hostile-head.git"
 tip=$(git --git-dir="$UPSTREAM/hostile-head.git" rev-parse master)
 name="--upload-pack=touch${TMP//\//_}"

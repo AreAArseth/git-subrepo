@@ -73,6 +73,23 @@ test-exists "$journal"
 git -C "$repo" config --unset core.hooksPath
 cp "$journal" "$TMP/saved-journal"
 cp "$journal.message" "$TMP/saved-message"
+refs_before=$(git -C "$repo" show-ref)
+index_before=$(git -C "$repo" write-tree)
+rm "$journal"
+for operation in pull clean status fetch; do
+  status=0
+  (cd "$repo" && git subrepo "$operation" bar) > "$TMP/missing-journal" 2>&1 || status=$?
+  is "$status" 1 "$operation refuses a prepared integration with a missing journal"
+  like "$(cat "$TMP/missing-journal")" 'recovery record|journal' \
+    'missing prepared recovery has an explicit diagnostic'
+  is "$(git -C "$repo" show-ref)" "$refs_before" 'missing journal refusal preserves all binding and project refs'
+  is "$(git -C "$repo" write-tree)" "$index_before" 'missing journal refusal preserves the index'
+  is "$(git -C "$repo" status --porcelain)" "" 'missing journal refusal preserves project files'
+  unchanged=0
+  cmp "$journal.message" "$TMP/saved-message" > /dev/null 2>&1 || unchanged=$?
+  is "$unchanged" 0 'missing journal refusal preserves the saved message bytes'
+done
+cp "$TMP/saved-journal" "$journal"
 for tamper in tree directory mapped message; do
   cp "$TMP/saved-journal" "$journal"
   cp "$TMP/saved-message" "$journal.message"
@@ -131,6 +148,40 @@ is "$(git config -f "$repo/tagged/.gitrepo" subrepo-v2.commit)" "$published" \
 is "$(git config -f "$repo/tagged/.gitrepo" subrepo-v2.branch)" refs/tags/recovered \
   'tag recovery retains the explicit selector'
 test-exists "!$journal"
+
+linked=$OWNER/recovery-linked
+git -C "$repo" worktree add -qb recovery-linked "$linked"
+(
+  cd "$OWNER/bar"
+  printf 'linked recovery\n' > linked-incoming
+  git add linked-incoming
+  git commit -qm 'Incoming linked-worktree recovery fixture'
+  git push -q
+)
+git -C "$linked" config core.hooksPath "$TMP/hooks"
+status=0
+(cd "$linked" && git subrepo pull bar) > "$TMP/linked-interrupted" 2>&1 || status=$?
+is "$status" 1 'a linked worktree can prepare its own interrupted integration'
+linked_journal=$(git -C "$linked" rev-parse --git-path subrepo-integration)
+cp "$linked_journal" "$TMP/linked-journal"
+refs_before=$(git -C "$linked" show-ref)
+before=$(git -C "$linked" rev-parse HEAD)
+rm "$linked_journal"
+status=0
+(cd "$linked" && git subrepo clean bar) > "$TMP/linked-missing" 2>&1 || status=$?
+is "$status" 1 'linked recovery refuses a missing worktree-specific journal'
+like "$(cat "$TMP/linked-missing")" 'missing its journal' 'linked refusal identifies the remaining prepared binding'
+is "$(git -C "$linked" show-ref)" "$refs_before" 'linked missing-journal refusal preserves all refs'
+is "$(git -C "$linked" rev-parse HEAD)" "$before" 'linked missing-journal refusal preserves project HEAD'
+is "$(git -C "$linked" status --porcelain)" "" 'linked missing-journal refusal preserves project files'
+status=0
+(cd "$repo" && git subrepo fetch tagged) > "$TMP/other-worktree-fetch" 2>&1 || status=$?
+is "$status" 0 'a journal missing in another worktree does not block unrelated worktree recovery state'
+cp "$TMP/linked-journal" "$linked_journal"
+git -C "$linked" config --unset core.hooksPath
+(cd "$linked" && git subrepo pull bar) > "$TMP/linked-resumed" 2>&1
+is "$(cat "$linked/bar/linked-incoming")" 'linked recovery' 'restoring the linked journal permits the exact retry'
+test-exists "!$linked_journal"
 
 done_testing
 teardown

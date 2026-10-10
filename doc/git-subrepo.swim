@@ -220,8 +220,10 @@ the retry preserves that work and stops rather than discarding it.
 
 Recovery files and saved messages are bound to prepared Git blobs under
 worktree-specific refs. Missing or altered records are refused before checkout
-or commit. Pending publications must match the shared snapshot and its
-reconstructed export before pushing. Preserve the recovery files and refs
+or commit, including a missing journal whose prepared-operation ref remains.
+Attempted commit messages are saved through unique temporary files before
+replacing the saved message. Pending publications must match the shared snapshot
+and its reconstructed export before pushing. Preserve the recovery files and refs
 together; older records without this binding require maintainer inspection.
 These integrity checks are not authentication against someone who can also
 replace Git objects, refs, or hooks. Restrict write access to Git administration
@@ -246,6 +248,9 @@ quoting when copying them into a shell.
 
 Upstream operations resolve plain names against advertised branches and tags. A name
 matching both is refused; use an unambiguous name or an explicit tag selector.
+The selected full ref is retained throughout each operation, including repeated
+fetches, comparisons, and publication; a concurrent namespace change cannot
+redirect that operation from a branch to a tag or vice versa.
 
 Synchronization permits standard file, Git, HTTP(S), FTP(S), and SSH transports
 only. External transport helpers are refused even if enabled in Git configuration,
