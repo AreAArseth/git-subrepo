@@ -1,3 +1,12 @@
+version: 0.5.1
+date:    Sat 10 Oct 2026
+- Fixes 14 issues.
+- Close the lifetime observer's FIFO before removing operation files on NFS,
+  without releasing locks before Git descendants and cleanup hooks finish.
+- Ignore CDPATH when resolving repository, object and executable symlink paths.
+- Reduce test runtime with bounded parallel scheduling; run oldest-version
+  CI tests serially.
+---
 version: 0.5.0
 date:    Fri 9 Oct 2026
 - New subrepos use prefixed imported history and complete v2 tracking metadata.
@@ -28,9 +37,6 @@ date:    Fri 9 Oct 2026
 - Preflight shared worktrees before forced replacement; scope nested workflows
   explicitly to legacy history.
 - Clean up test fixtures before capability skips and clarify retarget --all usage.
-- Close the lifetime observer's FIFO before removing operation files on NFS,
-  without releasing locks before Git descendants and cleanup hooks finish.
-- Ignore CDPATH when resolving repository, object and executable symlink paths.
 ---
 version: 0.4.9
 date:    Mon 25 Jul 2024 11:23:34 AM CST
