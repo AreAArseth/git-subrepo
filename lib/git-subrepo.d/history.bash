@@ -1340,7 +1340,7 @@ history:remote-tip() {
   fi
   local selectors=("$ref")
   [[ $ref != refs/tags/* ]] || selectors+=("$ref^{}")
-  output=$(git ls-remote -- "$subrepo_remote" "${selectors[@]}") || return
+  output=$(git:with-safe-protocols git ls-remote -- "$subrepo_remote" "${selectors[@]}") || return
   while IFS=$'\t' read -r oid name; do
     if [[ $name == "$ref" ]]; then
       tip=$oid
@@ -1417,7 +1417,7 @@ Then retry your push."
   fi
   if $publish; then
     previous_tip=$(git config -f "$pending" push.previous)
-    if ! git push -- "$subrepo_remote" "$candidate:$destination"; then
+    if ! git:with-safe-protocols git push -- "$subrepo_remote" "$candidate:$destination"; then
       remote_tip=$(history:remote-tip "$destination") ||
         error "The push result could not be confirmed. Your files and pending record were kept. Retry this push after reconnecting."
       if [[ $remote_tip != "$candidate" ]]; then

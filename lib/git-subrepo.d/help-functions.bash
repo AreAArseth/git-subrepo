@@ -437,6 +437,10 @@ help:retarget() {
   and pushes it. Commit its changed `.gitrepo` settings before the next pull.
   Legacy retarget does not support `--dry-run`.
 
+  Legacy retarget to a tag requires `--force` before changing files or refs.
+  The tag update uses a lease on the fetched tag object, so a concurrent tag
+  change is refused. Retarget to a branch still never force-pushes.
+
   Use `--branch` and/or `--remote` to override the upstream. Retarget persists
   those overrides by default; `--update` may also be supplied explicitly.
   The command accepts `--all`, `--branch=`, `--remote=`, `--update`, `--force`,

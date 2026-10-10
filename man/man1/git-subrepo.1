@@ -353,6 +353,11 @@ preserve that quoting when copying them into a shell.
 Publication resolves plain names against advertised branches and tags. A name
 matching both is refused; use an unambiguous name or an explicit tag selector.
 .PP
+Synchronization permits standard file, Git, \s-1HTTP\s0(S), \s-1FTP\s0(S), and \s-1SSH\s0 transports
+only. External transport helpers are refused even if enabled in Git configuration,
+including through named remotes, \s-1URL\s0 rewrites, or push URLs. Git protocol policies
+and stricter \f(CW\*(C`GIT_ALLOW_PROTOCOL\*(C'\fR restrictions remain enforced.
+.PP
 Shared worktree ownership records follow the same filesystem rules. Detached
 shared worktrees must have an active rebase identifying the expected branch.
 .PP
@@ -595,6 +600,10 @@ In legacy history only, retarget also supports an upstream without the old
 shared history. It creates or reuses the shared branch, merges the new
 upstream and pushes it. Commit its changed \f(CW\*(C`.gitrepo\*(C'\fR settings before the
 next pull. Legacy retarget does not support \f(CW\*(C`\-\-dry\-run\*(C'\fR.
+.Sp
+Legacy retarget to a tag requires \f(CW\*(C`\-\-force\*(C'\fR before changing files or refs.
+The tag update uses a lease on the fetched tag object, so a concurrent tag
+change is refused. Retarget to a branch still never force-pushes.
 .Sp
 Use \f(CW\*(C`\-\-branch\*(C'\fR and/or \f(CW\*(C`\-\-remote\*(C'\fR to override the upstream. Retarget persists
 those overrides by default; \f(CW\*(C`\-\-update\*(C'\fR may also be supplied explicitly. The

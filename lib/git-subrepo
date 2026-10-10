@@ -832,7 +832,20 @@ subrepo:retarget() {
     error "Can't retarget subrepo. Remote is 'none' in '$gitrepo'."
   fi
 
+  local destination tag_tip=''
+  local push_options=()
+  destination=$(upstream-ref) ||
+    error "Could not resolve the upstream publication destination. Nothing was pushed."
+  if [[ $destination == refs/tags/* ]] && ! $force_wanted; then
+    error "Legacy retarget to a tag requires --force. This can replace the tag; inspect the destination before retrying. No files or refs were changed."
+  fi
+
   CALL subrepo:fetch
+  if [[ $destination == refs/tags/* ]]; then
+    tag_tip=$(git rev-parse --verify 'FETCH_HEAD^{object}') ||
+      error "Could not resolve the fetched tag object. Nothing was pushed."
+    push_options+=("--force-with-lease=$destination:$tag_tip")
+  fi
 
   local branch_name=subrepo/$subref
   local worktree_created=false
@@ -926,10 +939,7 @@ subrepo:retarget() {
   cd "$start_pwd"
 
   o "Push branch '$branch_name' to '$subrepo_remote' ($subrepo_branch)."
-  local destination
-  destination=$(upstream-ref) ||
-    error "Could not resolve the upstream publication destination. Nothing was pushed."
-  RUN git push -- "$subrepo_remote" "$branch_name:$destination"
+  git:with-safe-protocols RUN git push "${push_options[@]}" -- "$subrepo_remote" "$branch_name:$destination"
 
   o "Create ref '$refs_subrepo_branch' for branch '$branch_name'."
   git:make-ref "$refs_subrepo_branch" "$branch_name"
@@ -1070,7 +1080,7 @@ subrepo:push() {
   destination=$(upstream-ref) ||
     error "Could not resolve the upstream publication destination. Nothing was pushed."
   # shellcheck disable=2086
-  RUN git push$force -- "$subrepo_remote" "$branch_name:$destination"
+  git:with-safe-protocols RUN git push$force -- "$subrepo_remote" "$branch_name:$destination"
 
   o "Create ref '$refs_subrepo_push' for branch '$branch_name'."
   git:make-ref "$refs_subrepo_push" "$branch_name"
@@ -1107,7 +1117,7 @@ subrepo:fetch() {
   fi
 
   o "Fetch the upstream: $subrepo_remote ($subrepo_branch)."
-  RUN git fetch --no-tags --quiet --refmap= -- "$subrepo_remote" "$subrepo_branch"
+  git:with-safe-protocols RUN git fetch --no-tags --quiet --refmap= -- "$subrepo_remote" "$subrepo_branch"
   OK || return
 
   o "Get the upstream subrepo HEAD commit."
@@ -1968,6 +1978,48 @@ validate-upstream() {
   fi
 }
 
+git:with-safe-protocols() {
+  local requested=${GIT_ALLOW_PROTOCOL-file:git:http:https:ssh:ftp:ftps}
+  local protocol allowed='' key policy protocol_config rc=0 from_user=true inherited=false
+  local -A policies=()
+  [[ ! ${GIT_ALLOW_PROTOCOL+x} ]] || inherited=true
+  if ! $inherited; then
+    protocol_config=$(git config --get-regexp '^protocol(\.(file|git|http|https|ssh|ftp|ftps))?\.allow$') || rc=$?
+    [[ $rc == 0 || $rc == 1 ]] ||
+      error "Could not read the Git protocol policy. Inspect Git configuration before retrying."
+    while read -r key policy; do
+      [[ $key ]] || continue
+      [[ $policy == always || $policy == never || $policy == user ]] ||
+        error "Invalid Git protocol policy for '$key'. Inspect Git configuration before retrying."
+      policies[$key]=$policy
+    done <<< "$protocol_config"
+    if [[ ${GIT_PROTOCOL_FROM_USER+x} ]]; then
+      from_user=$(git -c "git-subrepo.protocol-user=$GIT_PROTOCOL_FROM_USER" \
+        config --bool git-subrepo.protocol-user) ||
+        error "Invalid GIT_PROTOCOL_FROM_USER setting. Correct it before retrying."
+    fi
+  fi
+  for protocol in file git http https ssh ftp ftps; do
+    if [[ :$requested: == *":$protocol:"* ]]; then
+      if ! $inherited; then
+        key=protocol.$protocol.allow
+        policy=${policies[$key]:-${policies[protocol.allow]:-}}
+        if [[ ! $policy ]]; then
+          case "$protocol" in
+            file|ftp|ftps) policy=user ;;
+            *) policy=always ;;
+          esac
+        fi
+        if [[ $policy == never || ( $policy == user && $from_user == false ) ]]; then
+          continue
+        fi
+      fi
+      allowed=${allowed:+$allowed:}$protocol
+    fi
+  done
+  GIT_ALLOW_PROTOCOL=$allowed "$@"
+}
+
 upstream-ref() {
   validate-upstream "$subrepo_remote" "$subrepo_branch"
   if [[ $subrepo_branch == refs/tags/* ]]; then
@@ -1975,7 +2027,7 @@ upstream-ref() {
     return
   fi
   local output name head=false tag=false
-  output=$(git ls-remote --refs -- "$subrepo_remote" \
+  output=$(git:with-safe-protocols git ls-remote --refs -- "$subrepo_remote" \
     "refs/heads/$subrepo_branch" "refs/tags/$subrepo_branch") ||
     error "Could not resolve the upstream selector. Check the remote and your connection."
   while IFS=$'\t' read -r _ name; do
@@ -2373,7 +2425,7 @@ add-subrepo() {
 get-upstream-head-branch() {
   local remotes branch
   validate-upstream "$subrepo_remote" "" true
-  OUT=true RUN git ls-remote --symref -- "$subrepo_remote"
+  OUT=true git:with-safe-protocols RUN git ls-remote --symref -- "$subrepo_remote"
   remotes=$output
   [[ $remotes ]] ||
     error "Failed to 'git ls-remote --symref -- $(printf '%q' "$subrepo_remote")'."
