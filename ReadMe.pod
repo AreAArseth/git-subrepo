@@ -127,6 +127,15 @@ changes, first commit them normally in the parent project, then run:
 
 Files outside C<shared/> are not published to the shared remote.
 
+Prefixed-history operations require no staged or unstaged changes to tracked
+project files. Untracked and ignored files inside or outside the shared directory
+can stay in place unless their paths would be overwritten by the prepared update,
+including file/directory conflicts. Such collisions are refused even with
+C<--force>; preserve or move the reported files before retrying. Untracked and
+ignored files are never published.
+Temporary shared worktrees must still be completely clean before cleanup,
+including untracked and ignored files, because cleanup removes those worktrees.
+
 Default log output labels I<local> and I<imported> commits. They can represent
 the same shared change under different IDs. Use C<git subrepo log shared --group-equivalent> to group only entries whose recorded provenance and actual shared
 changes agree. This does not change Git history. A mixed parent commit can
@@ -247,8 +256,9 @@ If a push succeeds remotely but a local hook or signature fails, the
 diagnostic distinguishes those outcomes. Fix the local failure and retry the
 same push; the pending record lets git-subrepo finish without publishing the
 changes twice. Interrupted local integrations also retain a retry record.
-Retry on the same project branch; differing staged, untracked, ignored, or working-
-file edits are preserved rather than overwritten. Fix the reported hook or
+Retry on the same project branch; differing staged or tracked working-file edits
+are preserved rather than overwritten. Non-conflicting untracked and ignored files
+can stay in place; colliding paths are refused. Fix the reported hook or
 signing failure before retrying. If the editor or a later hook or signing step
 fails, the attempted commit message is saved before rollback. Retrying with
 C<--edit> reopens that saved draft rather than the original message; edits

@@ -26,6 +26,13 @@ rm "$repo/linked"
 
 printf 'bar/private\n' >> "$repo/.git/info/exclude"
 printf 'private content\n' > "$repo/bar/private"
+(
+  cd "$OWNER/bar"
+  echo incoming > private
+  git add private
+  git commit -qm 'Incoming file overlapping ignored content'
+  git push -q
+)
 status=0
 (cd "$repo" && git subrepo pull bar --force) > "$TMP/refused" 2>&1 || status=$?
 isnt "$status" 0 'force does not discard ignored shared files'
