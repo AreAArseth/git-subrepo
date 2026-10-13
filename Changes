@@ -1,3 +1,10 @@
+version: 0.5.2
+date:    Tue 13 Oct 2026
+- Allow non-conflicting untracked files inside subrepos while preserving ignored
+  files under literal subrepo paths.
+- Probe filesystem case handling before shared updates.
+- Clarify cleanliness requirements for project updates.
+---
 version: 0.5.1
 date:    Sat 10 Oct 2026
 - Fixes 14 issues.
