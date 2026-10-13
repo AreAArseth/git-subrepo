@@ -191,10 +191,11 @@ changes, first commit them normally in the parent project, then run:
 .PP
 Files outside \f(CW\*(C`shared/\*(C'\fR are not published to the shared remote.
 .PP
-Prefixed-history operations require no staged or unstaged changes to tracked
-project files. Untracked and ignored files inside or outside the shared directory
-can stay in place unless their paths would be overwritten by the prepared update,
-including file/directory conflicts. Such collisions are refused even with
+Prefixed-history operations that update the project working tree require no
+staged or unstaged changes to tracked project files. Untracked and ignored files
+inside or outside the shared directory can stay in place unless their paths would
+be overwritten by the prepared update, including file/directory conflicts.
+Such collisions are refused even with
 \f(CW\*(C`\-\-force\*(C'\fR; preserve or move the reported files before retrying. Untracked and
 ignored files are never published.
 Temporary shared worktrees must still be completely clean before cleanup,

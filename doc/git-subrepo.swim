@@ -89,10 +89,11 @@ first commit them normally in the parent project, then run:
 
 Files outside `shared/` are not published to the shared remote.
 
-Prefixed-history operations require no staged or unstaged changes to tracked
-project files. Untracked and ignored files inside or outside the shared directory
-can stay in place unless their paths would be overwritten by the prepared update,
-including file/directory conflicts. Such collisions are refused even with
+Prefixed-history operations that update the project working tree require no
+staged or unstaged changes to tracked project files. Untracked and ignored files
+inside or outside the shared directory can stay in place unless their paths would
+be overwritten by the prepared update, including file/directory conflicts.
+Such collisions are refused even with
 `--force`; preserve or move the reported files before retrying. Untracked and
 ignored files are never published.
 Temporary shared worktrees must still be completely clean before cleanup,
