@@ -733,7 +733,7 @@ history:assert-no-untracked-collisions() {
   elif [[ $status != 0 ]]; then
     error "Unable to inspect filesystem case handling for '$subdir/'. No files were overwritten."
   fi
-  git ls-tree -r --name-only -z "$tree" -- "$subdir/" > "$paths" ||
+  git ls-tree -r --name-only -z "$tree" -- ":(literal)$subdir/" > "$paths" ||
     error "Unable to inspect the prepared tree for '$subdir/'. No files were overwritten."
   while IFS= read -r -d '' path; do
     key=$path
