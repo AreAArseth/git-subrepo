@@ -375,10 +375,6 @@ Finish or clean the shared operation there before retrying. Its files were not c
   if $force_wanted && [[ $command =~ ^(clone|pull)$ ]]; then
     history:assert-worktree-clean
   fi
-  if [[ $command =~ ^(clone|init|pull|push|commit|migrate|retarget)$ ]] &&
-     [[ -n $(git ls-files --others -- ":(literal)$subdir") ]]; then
-    error "'$subdir/' contains untracked or ignored files. Preserve or commit them before synchronizing; no project files were changed."
-  fi
   local pending=$history_common/subrepo-pending/$subref/push
   history:validate-pending-path
   if [[ -f $pending && ! $command =~ ^(status|log|fetch)$ ]]; then
@@ -716,6 +712,61 @@ history:clear-integration() {
   rm -f "$journal" "$journal.message"
 }
 
+history:assert-no-untracked-collisions() {
+  local tree=$1 paths path key ancestor collision='' ignore_case probe
+  local -A files=() directories=()
+  local untracked=()
+  paths=$(mktemp "$history_tmp/paths.XXXXXXXX")
+  # No exclusion rules: ignored files need the same overwrite protection.
+  git ls-files --others -z -- ":(literal)$subdir" > "$paths" ||
+    error "Unable to inspect untracked or ignored files in '$subdir/'. No files were overwritten."
+  while IFS= read -r -d '' path; do
+    untracked+=("${path%/}")
+  done < "$paths"
+  if [[ ${#untracked[@]} == 0 ]]; then
+    rm -f "$paths"
+    return
+  fi
+  # Repository configuration can be stale after moving between filesystems.
+  probe=$(mktemp "$subdir/.git-subrepo-case.XXXXXXXX") ||
+    error "Unable to inspect filesystem case handling for '$subdir/'. No files were overwritten."
+  ignore_case=false
+  [[ ! $probe -ef $subdir/.GIT-SUBREPO-CASE.${probe##*.} ]] || ignore_case=true
+  rm -f -- "$probe" ||
+    error "Unable to remove the filesystem case probe in '$subdir/'. No files were overwritten."
+  git ls-tree -r --name-only -z "$tree" -- ":(literal)$subdir/" > "$paths" ||
+    error "Unable to inspect the prepared tree for '$subdir/'. No files were overwritten."
+  while IFS= read -r -d '' path; do
+    key=$path
+    if [[ $ignore_case == true ]]; then key=${key,,}; fi
+    files[$key]=1
+    ancestor=${path%/*}
+    while [[ $ancestor == "$subdir" || $ancestor == "$subdir/"* ]]; do
+      key=$ancestor
+      if [[ $ignore_case == true ]]; then key=${key,,}; fi
+      directories[$key]=1
+      [[ $ancestor == */* ]] || break
+      ancestor=${ancestor%/*}
+    done
+  done < "$paths"
+  rm -f "$paths"
+  for path in "${untracked[@]}"; do
+    key=$path
+    if [[ $ignore_case == true ]]; then key=${key,,}; fi
+    if [[ ${files[$key]-} || ${directories[$key]-} ]]; then
+      collision=$path
+    fi
+    ancestor=$key
+    while [[ ! $collision && $ancestor == */* ]]; do
+      ancestor=${ancestor%/*}
+      if [[ ${files[$ancestor]-} ]]; then collision=$path; fi
+    done
+    [[ ! $collision ]] ||
+      error "An untracked or ignored path ($(printf '%q' "$collision")) would be overwritten while updating '$subdir/'.
+Its contents were kept. Preserve or move it before retrying."
+  done
+}
+
 history:integrate() {
   local shared_tree=$1 message=$2 mapped=${3:-}
   local index tree blob expected head merge_path mode_path result=0
@@ -734,8 +785,7 @@ history:integrate() {
   [[ ! -e $merge_path ]] || error "Finish the current project merge before changing '$subdir/'."
   [[ $(git rev-parse HEAD) == "$expected" ]] ||
     error "The project changed while preparing '$subdir/'. Retry from the current branch."
-  [[ -z $(git ls-files --others -- ":(literal)$subdir") ]] ||
-    error "'$subdir/' contains untracked or ignored files. Preserve them before retrying; no project files were changed."
+  history:assert-no-untracked-collisions "$tree"
   if ! git diff --quiet || ! git diff --cached --quiet; then
     error "Local files changed while preparing '$subdir/'. Preserve those changes before retrying."
   fi
@@ -763,7 +813,7 @@ history:integrate() {
   history:save-integration-message "$journal" "$commit_msg_file" "$message"
   mv "$prepared" "$journal"
   history:seal-integration "$journal"
-  git read-tree --reset -u "$tree"
+  git read-tree -m -u "$expected" "$tree"
   if [[ $mapped ]]; then
     printf '%s\n' "$mapped" > "$merge_path"
     printf 'no-ff' > "$mode_path"
@@ -773,7 +823,8 @@ history:integrate() {
     head=$(git rev-parse HEAD)
     if [[ $head == "$expected" && $(git write-tree) == "$tree" ]] &&
        git diff --quiet; then
-      git read-tree --reset -u "$expected"
+      history:assert-no-untracked-collisions "$expected"
+      git read-tree -m -u "$tree" "$expected"
       [[ ! $mapped ]] || rm -f "$merge_path" "$mode_path"
       if [[ -f $history_common/subrepo-pending/$subref/push ]]; then
         error "Shared changes for '$subdir/' were sent upstream, but the local record could not be saved.
@@ -892,14 +943,13 @@ Your files were kept. Return to that branch before retrying the saved command."
     error "An interrupted shared update has uncommitted edits. Preserve those edits before retrying; no files were changed."
   [[ $index == "$tree" || $index == "$(git rev-parse 'HEAD^{tree}')" ]] ||
     error "The index changed after an interrupted shared update. Preserve those staged changes before retrying."
-  [[ -z $(git ls-files --others -- ":(literal)$directory") ]] ||
-    error "Preserve untracked or ignored files in '$directory/' before completing the interrupted update."
+  history:assert-no-untracked-collisions "$tree"
   merge_path=$(git rev-parse --git-path MERGE_HEAD)
   [[ ! -f $merge_path || $(cat "$merge_path") == "$mapped" ]] ||
     error "A different project merge is in progress. Finish it before retrying the shared update."
   git cat-file -e "$tree^{tree}" ||
     error "The prepared shared update is missing. Your current files were kept."
-  git read-tree --reset -u "$tree"
+  git read-tree -m -u "$index" "$tree"
   if [[ $mapped ]]; then
     git cat-file -e "$mapped^{commit}" ||
       error "The prepared imported history is missing. Your files were kept."
