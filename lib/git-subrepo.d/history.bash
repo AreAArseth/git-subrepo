@@ -713,7 +713,7 @@ history:clear-integration() {
 }
 
 history:assert-no-untracked-collisions() {
-  local tree=$1 paths path key ancestor collision='' ignore_case status=0
+  local tree=$1 paths path key ancestor collision='' ignore_case probe
   local -A files=() directories=()
   local untracked=()
   paths=$(mktemp "$history_tmp/paths.XXXXXXXX")
@@ -727,12 +727,13 @@ history:assert-no-untracked-collisions() {
     rm -f "$paths"
     return
   fi
-  ignore_case=$(git config --bool core.ignorecase) || status=$?
-  if [[ $status == 1 ]]; then
-    ignore_case=false
-  elif [[ $status != 0 ]]; then
+  # Repository configuration can be stale after moving between filesystems.
+  probe=$(mktemp "$subdir/.git-subrepo-case.XXXXXXXX") ||
     error "Unable to inspect filesystem case handling for '$subdir/'. No files were overwritten."
-  fi
+  ignore_case=false
+  [[ ! $probe -ef $subdir/.GIT-SUBREPO-CASE.${probe##*.} ]] || ignore_case=true
+  rm -f -- "$probe" ||
+    error "Unable to remove the filesystem case probe in '$subdir/'. No files were overwritten."
   git ls-tree -r --name-only -z "$tree" -- ":(literal)$subdir/" > "$paths" ||
     error "Unable to inspect the prepared tree for '$subdir/'. No files were overwritten."
   while IFS= read -r -d '' path; do
